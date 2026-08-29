@@ -638,7 +638,7 @@ const Icons = {
 // ═══════════════════════════════════════════
 // Marca de versión visible en el encabezado (junto al botón "Salir") y en la consola del
 // navegador, para verificar rápidamente si el archivo desplegado es el más reciente.
-const APP_VERSION = "2026-08-10-directiva-import-export-v31";
+const APP_VERSION = "2026-08-10-directiva-import-duplicados-v32";
 console.log("INEDISAV Caracterización — versión cargada:", APP_VERSION);
 const ROLE_LABELS = {admin:"Admin",rector:"Rector",coordinador:"Coordinador",orientacion:"Orientación Escolar",docente:"Docente",auxiliar:"Auxiliar",estudiante:"Estudiante"};
 const ROLE_BADGE  = {admin:"bg-indigo-300 text-indigo-900",rector:"bg-purple-300 text-purple-900",coordinador:"bg-amber-300 text-amber-900",orientacion:"bg-teal-300 text-teal-900",docente:"bg-emerald-300 text-emerald-900",auxiliar:"bg-sky-300 text-sky-900",estudiante:"bg-rose-200 text-rose-900"};
@@ -2169,7 +2169,11 @@ ${lfHtml()}
       const wb=XLSX.read(buf,{type:"array"});
       const rows=XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]],{defval:""});
       const norm=s=>String(s||"").normalize("NFD").replace(/[\u0300-\u036f]/g,"").trim().toLowerCase();
-      let ok=0, saltados=0;
+      // Los campos de texto/select identifican al registro (su "nombre"); los numéricos y
+      // de fecha son datos que sí se actualizan si el registro ya existe (ej. corregir un %).
+      const camposClave=campos.filter(c=>c.type!=="number"&&c.type!=="date");
+      const itemsLocal=[...items]; // copia mutable: si el mismo archivo trae la fila repetida, la detecta también
+      let ok=0, actualizados=0, saltados=0;
       for(const row of rows){
         const claves={}; Object.keys(row).forEach(k=>{claves[norm(k)]=row[k];});
         const data={};
@@ -2186,10 +2190,18 @@ ${lfHtml()}
           data[c.id]=raw;
         }
         if(faltaObligatorio){ saltados++; continue; }
-        await storage.saveOne(data);
-        ok++;
+        const existente=camposClave.length?itemsLocal.find(it=>camposClave.every(c=>norm(it[c.id])===norm(data[c.id]))):null;
+        if(existente){
+          await storage.saveOne({...data,_id:existente._id});
+          Object.assign(existente,data);
+          actualizados++;
+        }else{
+          const nuevoId=await storage.saveOne(data);
+          itemsLocal.push({...data,_id:nuevoId});
+          ok++;
+        }
       }
-      say(`${ok} registro(s) importado(s)${saltados?`, ${saltados} saltado(s) (faltaba un dato obligatorio)`:""}.`, saltados>0&&ok===0);
+      say(`${ok} nuevo(s), ${actualizados} actualizado(s) (ya existían)${saltados?`, ${saltados} saltado(s) (faltaba un dato obligatorio)`:""}.`, saltados>0&&ok===0&&actualizados===0);
     }catch(e){ console.error(e); say("No se pudo importar el archivo: "+e.message,true); }
     setImporting(false);
     if(fileRef.current) fileRef.current.value="";
