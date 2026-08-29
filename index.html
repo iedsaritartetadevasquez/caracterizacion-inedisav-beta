@@ -638,7 +638,7 @@ const Icons = {
 // ═══════════════════════════════════════════
 // Marca de versión visible en el encabezado (junto al botón "Salir") y en la consola del
 // navegador, para verificar rápidamente si el archivo desplegado es el más reciente.
-const APP_VERSION = "2026-08-10-banner-beta-v30";
+const APP_VERSION = "2026-08-10-directiva-import-export-v31";
 console.log("INEDISAV Caracterización — versión cargada:", APP_VERSION);
 const ROLE_LABELS = {admin:"Admin",rector:"Rector",coordinador:"Coordinador",orientacion:"Orientación Escolar",docente:"Docente",auxiliar:"Auxiliar",estudiante:"Estudiante"};
 const ROLE_BADGE  = {admin:"bg-indigo-300 text-indigo-900",rector:"bg-purple-300 text-purple-900",coordinador:"bg-amber-300 text-amber-900",orientacion:"bg-teal-300 text-teal-900",docente:"bg-emerald-300 text-emerald-900",auxiliar:"bg-sky-300 text-sky-900",estudiante:"bg-rose-200 text-rose-900"};
@@ -2082,17 +2082,20 @@ function GradosTutoresPanel({onClose, usuario, rolActual}){
 // ═══════════════════════════════════════════
 
 // Sub-sección genérica de lista simple (nombre + campos extra opcionales)
-function SeccionCrudSimple({storage,campos,titulo,ayuda,itemLabel,extraCols}){
+function SeccionCrudSimple({storage,campos,titulo,ayuda,itemLabel,extraCols,tituloImpresion}){
   const [items,setItems]=useState([]);
   const [loading,setLoading]=useState(true);
   const [form,setForm]=useState(()=>{const o={};campos.forEach(c=>o[c.id]=c.default!==undefined?c.default:"");return o;});
   const [editId,setEditId]=useState(null);
   const [msg,setMsg]=useState(""); const [msgErr,setMsgErr]=useState(false);
+  const [importing,setImporting]=useState(false);
+  const fileRef=useRef(null);
   const ic="border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400";
 
   useEffect(()=>{ const unsub=storage.subscribe(list=>{setItems(list);setLoading(false);},()=>setLoading(false)); return ()=>unsub(); },[]);
   function say(t,err=false){setMsg(t);setMsgErr(err);setTimeout(()=>setMsg(""),3500);}
   function limpiar(){const o={};campos.forEach(c=>o[c.id]=c.default!==undefined?c.default:"");setForm(o);setEditId(null);}
+  const etiquetaCampo=(c,val)=>c.type==="select"?((c.options||[]).find(o=>o.value===val)?.label||val||""):(val||"");
 
   async function guardar(){
     const oblig=campos.filter(c=>c.requerido!==false);
@@ -2110,9 +2113,98 @@ function SeccionCrudSimple({storage,campos,titulo,ayuda,itemLabel,extraCols}){
   }
   function editar(it){ setForm(Object.fromEntries(campos.map(c=>[c.id,it[c.id]??(c.default!==undefined?c.default:"")]))); setEditId(it._id); }
 
+  // Exportar a Excel: una columna por campo, mostrando la etiqueta (no el id interno) en los select.
+  function hExportar(){
+    if(!items.length){say("No hay nada que exportar.",true);return;}
+    const rows=items.map(it=>Object.fromEntries(campos.map(c=>[c.label,etiquetaCampo(c,it[c.id])])));
+    const ws=XLSX.utils.json_to_sheet(rows);
+    const wb=XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb,ws,itemLabel);
+    XLSX.writeFile(wb,`${itemLabel.replace(/\s+/g,"_")}_${new Date().toISOString().slice(0,10)}.xlsx`);
+  }
+
+  // Copiar al portapapeles en formato de columnas (se puede pegar directo en Excel/Word)
+  async function hCopiar(){
+    if(!items.length){say("No hay nada que copiar.",true);return;}
+    const encabezado=campos.map(c=>c.label).join("\t");
+    const filas=items.map(it=>campos.map(c=>etiquetaCampo(c,it[c.id])).join("\t"));
+    const texto=[encabezado,...filas].join("\n");
+    try{ await navigator.clipboard.writeText(texto); say(`${items.length} fila(s) copiada(s). Pégalas donde quieras (Ctrl+V).`); }
+    catch(e){ console.error(e); say("No se pudo copiar (el navegador bloqueó el acceso al portapapeles).",true); }
+  }
+
+  // Imprimir la lista completa en una pestaña nueva, con el encabezado del colegio
+  function hImprimir(){
+    if(!items.length){say("No hay nada que imprimir.",true);return;}
+    const filas=items.map((it,i)=>`<tr><td>${i+1}</td>${campos.map(c=>`<td class="${c.type==='select'?'':'tn'}">${etiquetaCampo(c,it[c.id])}</td>`).join("")}</tr>`).join("");
+    const html=`<!DOCTYPE html><html lang="es"><head><meta charset="UTF-8"><title>${tituloImpresion||itemLabel}</title>
+<style>*{box-sizing:border-box}body{font-family:Arial,sans-serif;margin:18px;font-size:12px}
+@media print{button{display:none!important}}
+h1{background:#1F4E79;color:#fff;text-align:center;padding:8px;font-size:13px;font-weight:700;margin:0}
+.sub{background:#BDD7EE;color:#1F4E79;text-align:center;padding:6px;font-size:11px;font-weight:700;margin-bottom:10px}
+table{width:100%;border-collapse:collapse;font-size:11px}
+th,td{border:1px solid #555;padding:6px}
+th{background:#1F4E79;color:#fff;text-align:left}
+.tn{text-align:left!important}
+h1,.sub{-webkit-print-color-adjust:exact;print-color-adjust:exact}
+</style></head><body>
+<button onclick="window.print()" style="margin-bottom:14px;padding:7px 18px;background:#4f46e5;color:#fff;border:none;border-radius:7px;cursor:pointer;">🖨️ Imprimir / Guardar PDF</button>
+${lhHtml()}
+<h1>IED SARID ARTETA DE VÁSQUEZ — "INEDISAV CONSTRUYENDO CALIDAD"</h1>
+<div class="sub">${(tituloImpresion||itemLabel).toUpperCase()}</div>
+<table><thead><tr><th style="width:35px">N°</th>${campos.map(c=>`<th>${c.label}</th>`).join("")}</tr></thead><tbody>${filas}</tbody></table>
+${lfHtml()}
+</body></html>`;
+    dlHtml(html,`${itemLabel.replace(/\s+/g,"_")}.html`);
+  }
+
+  // Importar desde Excel: hace match de columnas por nombre (sin importar mayúsculas/tildes)
+  // contra la etiqueta o el id de cada campo. Los campos tipo "select" se resuelven contra
+  // sus opciones (por etiqueta, o directo por el id/value si ya coincide).
+  async function handleImport(file){
+    if(!file) return;
+    setImporting(true);
+    try{
+      const buf=await file.arrayBuffer();
+      const wb=XLSX.read(buf,{type:"array"});
+      const rows=XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]],{defval:""});
+      const norm=s=>String(s||"").normalize("NFD").replace(/[\u0300-\u036f]/g,"").trim().toLowerCase();
+      let ok=0, saltados=0;
+      for(const row of rows){
+        const claves={}; Object.keys(row).forEach(k=>{claves[norm(k)]=row[k];});
+        const data={};
+        let faltaObligatorio=false;
+        for(const c of campos){
+          let raw=claves[norm(c.label)];
+          if(raw===undefined) raw=claves[norm(c.id)];
+          raw=String(raw??"").trim();
+          if(c.type==="select"&&raw){
+            const opt=(c.options||[]).find(o=>norm(o.label)===norm(raw)||o.value===raw);
+            raw=opt?opt.value:raw;
+          }
+          if(!raw && c.requerido!==false) faltaObligatorio=true;
+          data[c.id]=raw;
+        }
+        if(faltaObligatorio){ saltados++; continue; }
+        await storage.saveOne(data);
+        ok++;
+      }
+      say(`${ok} registro(s) importado(s)${saltados?`, ${saltados} saltado(s) (faltaba un dato obligatorio)`:""}.`, saltados>0&&ok===0);
+    }catch(e){ console.error(e); say("No se pudo importar el archivo: "+e.message,true); }
+    setImporting(false);
+    if(fileRef.current) fileRef.current.value="";
+  }
+
   return h('div',{className:"space-y-4"},
     ayuda&&h('p',{className:"text-xs text-slate-500"},ayuda),
     msg&&h('div',{className:`rounded-lg px-3 py-2 text-xs ${msgErr?"bg-rose-50 text-rose-700":"bg-emerald-50 text-emerald-700"}`},msg),
+    h('div',{className:"flex flex-wrap gap-2"},
+      h('button',{disabled:importing,onClick:()=>fileRef.current?.click(),className:"px-3 py-1.5 bg-emerald-600 text-white rounded-lg text-xs font-medium hover:bg-emerald-700 disabled:opacity-60"},importing?"Importando...":"📥 Importar Excel"),
+      h('input',{ref:fileRef,type:"file",accept:".xlsx,.xls",className:"hidden",onChange:e=>handleImport(e.target.files?.[0])}),
+      h('button',{onClick:hExportar,className:"px-3 py-1.5 border border-indigo-200 text-indigo-700 rounded-lg text-xs font-medium hover:bg-indigo-50"},"⬇️ Exportar Excel"),
+      h('button',{onClick:hCopiar,className:"px-3 py-1.5 border border-slate-200 text-slate-700 rounded-lg text-xs font-medium hover:bg-slate-50"},"📋 Copiar"),
+      h('button',{onClick:hImprimir,className:"px-3 py-1.5 border border-slate-200 text-slate-700 rounded-lg text-xs font-medium hover:bg-slate-50"},"🖨️ Imprimir")
+    ),
     h('div',{className:"bg-slate-50 border border-slate-200 rounded-xl p-3"},
       h('div',{className:"grid gap-2",style:{gridTemplateColumns:`repeat(${Math.min(campos.length,4)}, minmax(0,1fr))`}},
         campos.map(c=>c.type==="select"
@@ -2173,7 +2265,7 @@ function DirectivaPanel({onClose}){
       ),
       h('div',{className:"overflow-y-auto flex-1"},
         tab==="periodos"&&h(SeccionCrudSimple,{
-          storage:periodosStorage, itemLabel:"período",
+          storage:periodosStorage, itemLabel:"período", tituloImpresion:"Períodos Académicos",
           ayuda:"Los períodos del año lectivo y su ponderación en la nota final (deben sumar 100%).",
           campos:[
             {id:"nombre",label:"Nombre (ej. Período 1)"},
@@ -2184,12 +2276,12 @@ function DirectivaPanel({onClose}){
           ]
         }),
         tab==="areas"&&h(SeccionCrudSimple,{
-          storage:areasStorage, itemLabel:"área",
+          storage:areasStorage, itemLabel:"área", tituloImpresion:"Áreas del Plan de Estudios",
           ayuda:"Áreas del plan de estudios (ej. Ciencias Naturales, Humanidades). Cada asignatura pertenece a un área.",
           campos:[{id:"nombre",label:"Nombre del área"}]
         }),
         tab==="asignaturas"&&h(SeccionCrudSimple,{
-          storage:asignaturasStorage, itemLabel:"asignatura",
+          storage:asignaturasStorage, itemLabel:"asignatura", tituloImpresion:"Asignaturas",
           ayuda:areas.length?"Asignaturas del plan de estudios, agrupadas por área.":"Primero crea al menos un área en la pestaña anterior.",
           campos:[
             {id:"nombre",label:"Nombre de la asignatura"},
@@ -2197,7 +2289,7 @@ function DirectivaPanel({onClose}){
           ]
         }),
         tab==="asigGrado"&&h(SeccionCrudSimple,{
-          storage:asignaturasGradoStorage, itemLabel:"asignación",
+          storage:asignaturasGradoStorage, itemLabel:"asignación", tituloImpresion:"Asignaturas por Grado",
           ayuda:asignaturas.length?"Qué asignaturas se dictan en cada grado, y su intensidad horaria semanal.":"Primero crea al menos una asignatura en la pestaña anterior.",
           campos:[
             {id:"grado",label:"— Grado —",type:"select",options:GRADO_OPTS},
@@ -2206,7 +2298,7 @@ function DirectivaPanel({onClose}){
           ]
         }),
         tab==="escala"&&h(SeccionCrudSimple,{
-          storage:escalaStorage, itemLabel:"nivel",
+          storage:escalaStorage, itemLabel:"nivel", tituloImpresion:"Escala de Valoración",
           ayuda:"Escala de valoración: cada nivel cualitativo (ej. Superior) y el rango numérico que le corresponde (ej. 4.6 a 5.0).",
           campos:[
             {id:"nombre",label:"Nombre (ej. Superior)"},
@@ -2216,7 +2308,7 @@ function DirectivaPanel({onClose}){
           ]
         }),
         tab==="convivencia"&&h(SeccionCrudSimple,{
-          storage:convivenciaStorage, itemLabel:"criterio",
+          storage:convivenciaStorage, itemLabel:"criterio", tituloImpresion:"Criterios de Convivencia",
           ayuda:"Criterios de convivencia usados en la evaluación del comportamiento.",
           campos:[
             {id:"nombre",label:"Nombre del criterio"},
@@ -2224,7 +2316,7 @@ function DirectivaPanel({onClose}){
           ]
         }),
         tab==="propositos"&&h(SeccionCrudSimple,{
-          storage:propositosStorage, itemLabel:"propósito",
+          storage:propositosStorage, itemLabel:"propósito", tituloImpresion:"Propósitos por Área y Período",
           ayuda:"Propósitos/objetivos definidos por área y período (se usarán en los boletines).",
           campos:[
             {id:"areaId",label:"— Área —",type:"select",options:areaOpts},
