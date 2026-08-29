@@ -638,7 +638,7 @@ const Icons = {
 // ═══════════════════════════════════════════
 // Marca de versión visible en el encabezado (junto al botón "Salir") y en la consola del
 // navegador, para verificar rápidamente si el archivo desplegado es el más reciente.
-const APP_VERSION = "2026-08-10-areas-estado-director-v33";
+const APP_VERSION = "2026-08-10-abreviatura-asignatura-v34";
 console.log("INEDISAV Caracterización — versión cargada:", APP_VERSION);
 const ROLE_LABELS = {admin:"Admin",rector:"Rector",coordinador:"Coordinador",orientacion:"Orientación Escolar",docente:"Docente",auxiliar:"Auxiliar",estudiante:"Estudiante"};
 const ROLE_BADGE  = {admin:"bg-indigo-300 text-indigo-900",rector:"bg-purple-300 text-purple-900",coordinador:"bg-amber-300 text-amber-900",orientacion:"bg-teal-300 text-teal-900",docente:"bg-emerald-300 text-emerald-900",auxiliar:"bg-sky-300 text-sky-900",estudiante:"bg-rose-200 text-rose-900"};
@@ -2182,6 +2182,7 @@ ${lfHtml()}
           let raw=claves[norm(c.label)];
           if(raw===undefined) raw=claves[norm(c.id)];
           raw=String(raw??"").trim();
+          if(c.maxLength) raw=raw.slice(0,c.maxLength);
           if(c.type==="select"&&raw){
             const opt=(c.options||[]).find(o=>norm(o.label)===norm(raw)||o.value===raw);
             raw=opt?opt.value:raw;
@@ -2221,7 +2222,7 @@ ${lfHtml()}
       h('div',{className:"grid gap-2",style:{gridTemplateColumns:`repeat(${Math.min(campos.length,4)}, minmax(0,1fr))`}},
         campos.map(c=>c.type==="select"
           ?h('select',{key:c.id,value:form[c.id],onChange:e=>setForm({...form,[c.id]:e.target.value}),className:ic},h('option',{value:""},c.label),(c.options||[]).map(o=>h('option',{key:o.value,value:o.value},o.label)))
-          :h('input',{key:c.id,type:c.type||"text",placeholder:c.label,value:form[c.id],onChange:e=>setForm({...form,[c.id]:e.target.value}),className:ic})
+          :h('input',{key:c.id,type:c.type||"text",placeholder:c.maxLength?`${c.label} (máx ${c.maxLength})`:c.label,maxLength:c.maxLength||undefined,value:form[c.id],onChange:e=>setForm({...form,[c.id]:c.maxLength?e.target.value.slice(0,c.maxLength):e.target.value}),className:ic})
         )
       ),
       h('div',{className:"flex gap-2 mt-2"},
@@ -2302,9 +2303,10 @@ function DirectivaPanel({onClose}){
         }),
         tab==="asignaturas"&&h(SeccionCrudSimple,{
           storage:asignaturasStorage, itemLabel:"asignatura", tituloImpresion:"Asignaturas",
-          ayuda:areas.length?"Asignaturas del plan de estudios, agrupadas por área.":"Primero crea al menos un área en la pestaña anterior.",
+          ayuda:areas.length?"Asignaturas del plan de estudios, agrupadas por área. La abreviatura se usará para que los reportes no queden con nombres muy largos.":"Primero crea al menos un área en la pestaña anterior.",
           campos:[
             {id:"nombre",label:"Nombre de la asignatura"},
+            {id:"abreviatura",label:"Abreviatura",maxLength:5,requerido:false},
             {id:"areaId",label:"— Área —",type:"select",options:areaOpts}
           ]
         }),
