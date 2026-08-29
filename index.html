@@ -638,7 +638,7 @@ const Icons = {
 // ═══════════════════════════════════════════
 // Marca de versión visible en el encabezado (junto al botón "Salir") y en la consola del
 // navegador, para verificar rápidamente si el archivo desplegado es el más reciente.
-const APP_VERSION = "2026-08-10-directiva-import-duplicados-v32";
+const APP_VERSION = "2026-08-10-areas-estado-director-v33";
 console.log("INEDISAV Caracterización — versión cargada:", APP_VERSION);
 const ROLE_LABELS = {admin:"Admin",rector:"Rector",coordinador:"Coordinador",orientacion:"Orientación Escolar",docente:"Docente",auxiliar:"Auxiliar",estudiante:"Estudiante"};
 const ROLE_BADGE  = {admin:"bg-indigo-300 text-indigo-900",rector:"bg-purple-300 text-purple-900",coordinador:"bg-amber-300 text-amber-900",orientacion:"bg-teal-300 text-teal-900",docente:"bg-emerald-300 text-emerald-900",auxiliar:"bg-sky-300 text-sky-900",estudiante:"bg-rose-200 text-rose-900"};
@@ -2116,7 +2116,7 @@ function SeccionCrudSimple({storage,campos,titulo,ayuda,itemLabel,extraCols,titu
   // Exportar a Excel: una columna por campo, mostrando la etiqueta (no el id interno) en los select.
   function hExportar(){
     if(!items.length){say("No hay nada que exportar.",true);return;}
-    const rows=items.map(it=>Object.fromEntries(campos.map(c=>[c.label,etiquetaCampo(c,it[c.id])])));
+    const rows=items.map(it=>Object.fromEntries(campos.map(c=>[c.label,etiquetaCampo(c,it[c.id]??c.default)])));
     const ws=XLSX.utils.json_to_sheet(rows);
     const wb=XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb,ws,itemLabel);
@@ -2127,7 +2127,7 @@ function SeccionCrudSimple({storage,campos,titulo,ayuda,itemLabel,extraCols,titu
   async function hCopiar(){
     if(!items.length){say("No hay nada que copiar.",true);return;}
     const encabezado=campos.map(c=>c.label).join("\t");
-    const filas=items.map(it=>campos.map(c=>etiquetaCampo(c,it[c.id])).join("\t"));
+    const filas=items.map(it=>campos.map(c=>etiquetaCampo(c,it[c.id]??c.default)).join("\t"));
     const texto=[encabezado,...filas].join("\n");
     try{ await navigator.clipboard.writeText(texto); say(`${items.length} fila(s) copiada(s). Pégalas donde quieras (Ctrl+V).`); }
     catch(e){ console.error(e); say("No se pudo copiar (el navegador bloqueó el acceso al portapapeles).",true); }
@@ -2136,7 +2136,7 @@ function SeccionCrudSimple({storage,campos,titulo,ayuda,itemLabel,extraCols,titu
   // Imprimir la lista completa en una pestaña nueva, con el encabezado del colegio
   function hImprimir(){
     if(!items.length){say("No hay nada que imprimir.",true);return;}
-    const filas=items.map((it,i)=>`<tr><td>${i+1}</td>${campos.map(c=>`<td class="${c.type==='select'?'':'tn'}">${etiquetaCampo(c,it[c.id])}</td>`).join("")}</tr>`).join("");
+    const filas=items.map((it,i)=>`<tr><td>${i+1}</td>${campos.map(c=>`<td class="${c.type==='select'?'':'tn'}">${etiquetaCampo(c,it[c.id]??c.default)}</td>`).join("")}</tr>`).join("");
     const html=`<!DOCTYPE html><html lang="es"><head><meta charset="UTF-8"><title>${tituloImpresion||itemLabel}</title>
 <style>*{box-sizing:border-box}body{font-family:Arial,sans-serif;margin:18px;font-size:12px}
 @media print{button{display:none!important}}
@@ -2235,7 +2235,7 @@ ${lfHtml()}
       h('table',{className:"w-full text-sm"},
         h('thead',{className:"bg-slate-50 text-slate-500 text-xs uppercase"},h('tr',null,campos.map(c=>h('th',{key:c.id,className:"text-left px-3 py-2"},c.label)),h('th',{className:"text-left px-3 py-2"},"Acciones"))),
         h('tbody',null,items.map(it=>h('tr',{key:it._id,className:"border-t border-slate-100"},
-          campos.map(c=>h('td',{key:c.id,className:"px-3 py-2"},c.type==="select"?((c.options||[]).find(o=>o.value===it[c.id])?.label||it[c.id]):(it[c.id]||"")),
+          campos.map(c=>h('td',{key:c.id,className:"px-3 py-2"},etiquetaCampo(c,it[c.id]??c.default)),
           ),
           h('td',{className:"px-3 py-2"},h('div',{className:"flex gap-2"},
             h('button',{onClick:()=>editar(it),className:"text-xs px-2 py-1 border border-slate-200 rounded hover:bg-slate-50"},"Editar"),
@@ -2251,10 +2251,14 @@ function DirectivaPanel({onClose}){
   const [tab,setTab]=useState("periodos");
   const [areas,setAreas]=useState([]);
   const [asignaturas,setAsignaturas]=useState([]);
+  const [personal,setPersonal]=useState([]);
   useEffect(()=>{ const unsub=areasStorage.subscribe(setAreas,()=>{}); return ()=>unsub(); },[]);
   useEffect(()=>{ const unsub=asignaturasStorage.subscribe(setAsignaturas,()=>{}); return ()=>unsub(); },[]);
+  useEffect(()=>{ const unsub=personalStorage.subscribe(setPersonal,()=>{}); return ()=>unsub(); },[]);
   const areaOpts=areas.map(a=>({value:a._id,label:a.nombre}));
   const asignaturaOpts=asignaturas.map(a=>({value:a._id,label:`${a.nombre}${areas.find(ar=>ar._id===a.areaId)?.nombre?" ("+areas.find(ar=>ar._id===a.areaId).nombre+")":""}`}));
+  const personalOpts=personal.map(p=>({value:p._id||p.cedula,label:p.nombres})).sort((a,b)=>(a.label||"").localeCompare(b.label||""));
+  const ESTADO_OPTS_AREA=[{value:"activo",label:"✅ Activa"},{value:"inactivo",label:"⛔ Inactiva"}];
 
   const TABS=[
     {id:"periodos",label:"Períodos"},
@@ -2289,8 +2293,12 @@ function DirectivaPanel({onClose}){
         }),
         tab==="areas"&&h(SeccionCrudSimple,{
           storage:areasStorage, itemLabel:"área", tituloImpresion:"Áreas del Plan de Estudios",
-          ayuda:"Áreas del plan de estudios (ej. Ciencias Naturales, Humanidades). Cada asignatura pertenece a un área.",
-          campos:[{id:"nombre",label:"Nombre del área"}]
+          ayuda:"Áreas del plan de estudios (ej. Ciencias Naturales, Humanidades). Cada asignatura pertenece a un área. Puedes desactivar un área si cambia el plan de estudios, sin borrar su historial.",
+          campos:[
+            {id:"nombre",label:"Nombre del área"},
+            {id:"director",label:"Director de Área",type:"select",options:personalOpts,requerido:false},
+            {id:"activo",label:"Estado",type:"select",options:ESTADO_OPTS_AREA,default:"activo",requerido:false}
+          ]
         }),
         tab==="asignaturas"&&h(SeccionCrudSimple,{
           storage:asignaturasStorage, itemLabel:"asignatura", tituloImpresion:"Asignaturas",
