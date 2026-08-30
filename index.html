@@ -638,7 +638,7 @@ const Icons = {
 // ═══════════════════════════════════════════
 // Marca de versión visible en el encabezado (junto al botón "Salir") y en la consola del
 // navegador, para verificar rápidamente si el archivo desplegado es el más reciente.
-const APP_VERSION = "2026-08-10-asiggrado-porcentaje-nivel-v35";
+const APP_VERSION = "2026-08-10-directiva-buscar-v37";
 console.log("INEDISAV Caracterización — versión cargada:", APP_VERSION);
 const ROLE_LABELS = {admin:"Admin",rector:"Rector",coordinador:"Coordinador",orientacion:"Orientación Escolar",docente:"Docente",auxiliar:"Auxiliar",estudiante:"Estudiante"};
 const ROLE_BADGE  = {admin:"bg-indigo-300 text-indigo-900",rector:"bg-purple-300 text-purple-900",coordinador:"bg-amber-300 text-amber-900",orientacion:"bg-teal-300 text-teal-900",docente:"bg-emerald-300 text-emerald-900",auxiliar:"bg-sky-300 text-sky-900",estudiante:"bg-rose-200 text-rose-900"};
@@ -2101,16 +2101,21 @@ function SeccionCrudSimple({storage,campos,titulo,ayuda,itemLabel,extraCols,titu
   const [editId,setEditId]=useState(null);
   const [msg,setMsg]=useState(""); const [msgErr,setMsgErr]=useState(false);
   const [importing,setImporting]=useState(false);
+  const [busqueda,setBusqueda]=useState("");
   const fileRef=useRef(null);
+  const sayRef=useRef(null);
   const ic="border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400";
 
   useEffect(()=>{ const unsub=storage.subscribe(list=>{setItems(list);setLoading(false);},()=>setLoading(false)); return ()=>unsub(); },[]);
-  function say(t,err=false){setMsg(t);setMsgErr(err);setTimeout(()=>setMsg(""),3500);}
+  function say(t,err=false,dur){setMsg(t);setMsgErr(err);if(sayRef.current)clearTimeout(sayRef.current);sayRef.current=setTimeout(()=>setMsg(""),dur||(t.length>60?9000:3500));}
   function limpiar(){const o={};campos.forEach(c=>o[c.id]=c.default!==undefined?c.default:"");setForm(o);setEditId(null);}
   const etiquetaCampo=(c,val)=>c.type==="select"?((c.options||[]).find(o=>o.value===val)?.label||val||""):(val||"");
   // Para campos calculados (ej. Nivel Educativo, que sale solo del grado) no hay valor
   // guardado -- se calcula al vuelo con c.compute(item). Se usa en tabla/exportar/copiar/imprimir.
   const valorMostrado=(c,it)=>c.type==="computed"?(c.compute?c.compute(it):""):etiquetaCampo(c,it[c.id]??c.default);
+  const normBusqueda=s=>String(s||"").normalize("NFD").replace(/[\u0300-\u036f]/g,"").trim().toLowerCase();
+  const qBusqueda=normBusqueda(busqueda);
+  const itemsFiltrados=qBusqueda?items.filter(it=>campos.some(c=>normBusqueda(valorMostrado(c,it)).includes(qBusqueda))):items;
 
   async function guardar(){
     const oblig=campos.filter(c=>c.requerido!==false);
@@ -2130,8 +2135,8 @@ function SeccionCrudSimple({storage,campos,titulo,ayuda,itemLabel,extraCols,titu
 
   // Exportar a Excel: una columna por campo, mostrando la etiqueta (no el id interno) en los select.
   function hExportar(){
-    if(!items.length){say("No hay nada que exportar.",true);return;}
-    const rows=items.map(it=>Object.fromEntries(campos.map(c=>[c.label,valorMostrado(c,it)])));
+    if(!itemsFiltrados.length){say("No hay nada que exportar.",true);return;}
+    const rows=itemsFiltrados.map(it=>Object.fromEntries(campos.map(c=>[c.label,valorMostrado(c,it)])));
     const ws=XLSX.utils.json_to_sheet(rows);
     const wb=XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb,ws,itemLabel);
@@ -2140,9 +2145,9 @@ function SeccionCrudSimple({storage,campos,titulo,ayuda,itemLabel,extraCols,titu
 
   // Copiar al portapapeles en formato de columnas (se puede pegar directo en Excel/Word)
   async function hCopiar(){
-    if(!items.length){say("No hay nada que copiar.",true);return;}
+    if(!itemsFiltrados.length){say("No hay nada que copiar.",true);return;}
     const encabezado=campos.map(c=>c.label).join("\t");
-    const filas=items.map(it=>campos.map(c=>valorMostrado(c,it)).join("\t"));
+    const filas=itemsFiltrados.map(it=>campos.map(c=>valorMostrado(c,it)).join("\t"));
     const texto=[encabezado,...filas].join("\n");
     try{ await navigator.clipboard.writeText(texto); say(`${items.length} fila(s) copiada(s). Pégalas donde quieras (Ctrl+V).`); }
     catch(e){ console.error(e); say("No se pudo copiar (el navegador bloqueó el acceso al portapapeles).",true); }
@@ -2150,8 +2155,8 @@ function SeccionCrudSimple({storage,campos,titulo,ayuda,itemLabel,extraCols,titu
 
   // Imprimir la lista completa en una pestaña nueva, con el encabezado del colegio
   function hImprimir(){
-    if(!items.length){say("No hay nada que imprimir.",true);return;}
-    const filas=items.map((it,i)=>`<tr><td>${i+1}</td>${campos.map(c=>`<td class="${c.type==='select'?'':'tn'}">${valorMostrado(c,it)}</td>`).join("")}</tr>`).join("");
+    if(!itemsFiltrados.length){say("No hay nada que imprimir.",true);return;}
+    const filas=itemsFiltrados.map((it,i)=>`<tr><td>${i+1}</td>${campos.map(c=>`<td class="${c.type==='select'?'':'tn'}">${valorMostrado(c,it)}</td>`).join("")}</tr>`).join("");
     const html=`<!DOCTYPE html><html lang="es"><head><meta charset="UTF-8"><title>${tituloImpresion||itemLabel}</title>
 <style>*{box-sizing:border-box}body{font-family:Arial,sans-serif;margin:18px;font-size:12px}
 @media print{button{display:none!important}}
@@ -2224,7 +2229,7 @@ ${lfHtml()}
           ok++;
         }
       }
-      say(`${ok} nuevo(s), ${actualizados} actualizado(s) (ya existían)${saltados?`, ${saltados} saltado(s) (faltaba un dato obligatorio)`:""}.`, saltados>0&&ok===0&&actualizados===0);
+      say(`${ok} nuevo(s), ${actualizados} actualizado(s) (ya existían)${saltados?`, ${saltados} saltado(s) (faltaba un dato obligatorio)`:""}.`, saltados>0&&ok===0&&actualizados===0, 12000);
     }catch(e){ console.error(e); say("No se pudo importar el archivo: "+e.message,true); }
     setImporting(false);
     if(fileRef.current) fileRef.current.value="";
@@ -2233,12 +2238,14 @@ ${lfHtml()}
   return h('div',{className:"space-y-4"},
     ayuda&&h('p',{className:"text-xs text-slate-500"},ayuda),
     msg&&h('div',{className:`rounded-lg px-3 py-2 text-xs ${msgErr?"bg-rose-50 text-rose-700":"bg-emerald-50 text-emerald-700"}`},msg),
-    h('div',{className:"flex flex-wrap gap-2"},
+    h('div',{className:"flex flex-wrap gap-2 items-center"},
+      h('input',{placeholder:"🔎 Buscar...",value:busqueda,onChange:e=>setBusqueda(e.target.value),className:"px-3 py-1.5 border border-slate-200 rounded-lg text-xs min-w-[160px]"}),
       h('button',{disabled:importing,onClick:()=>fileRef.current?.click(),className:"px-3 py-1.5 bg-emerald-600 text-white rounded-lg text-xs font-medium hover:bg-emerald-700 disabled:opacity-60"},importing?"Importando...":"📥 Importar Excel"),
       h('input',{ref:fileRef,type:"file",accept:".xlsx,.xls",className:"hidden",onChange:e=>handleImport(e.target.files?.[0])}),
       h('button',{onClick:hExportar,className:"px-3 py-1.5 border border-indigo-200 text-indigo-700 rounded-lg text-xs font-medium hover:bg-indigo-50"},"⬇️ Exportar Excel"),
       h('button',{onClick:hCopiar,className:"px-3 py-1.5 border border-slate-200 text-slate-700 rounded-lg text-xs font-medium hover:bg-slate-50"},"📋 Copiar"),
-      h('button',{onClick:hImprimir,className:"px-3 py-1.5 border border-slate-200 text-slate-700 rounded-lg text-xs font-medium hover:bg-slate-50"},"🖨️ Imprimir")
+      h('button',{onClick:hImprimir,className:"px-3 py-1.5 border border-slate-200 text-slate-700 rounded-lg text-xs font-medium hover:bg-slate-50"},"🖨️ Imprimir"),
+      qBusqueda&&h('span',{className:"text-xs text-slate-400"},`${itemsFiltrados.length} de ${items.length}`)
     ),
     h('div',{className:"bg-slate-50 border border-slate-200 rounded-xl p-3"},
       h('div',{className:"grid gap-2",style:{gridTemplateColumns:`repeat(${Math.min(campos.filter(c=>c.type!=="computed").length,4)}, minmax(0,1fr))`}},
@@ -2255,9 +2262,10 @@ ${lfHtml()}
     h('div',{className:"border border-slate-200 rounded-lg overflow-hidden"},
       loading?h('p',{className:"text-sm text-slate-400 text-center py-6"},"Cargando..."):
       items.length===0?h('p',{className:"text-sm text-slate-400 text-center py-6"},`No hay ${itemLabel}s registrados aún.`):
+      itemsFiltrados.length===0?h('p',{className:"text-sm text-slate-400 text-center py-6"},"Ningún registro coincide con la búsqueda."):
       h('table',{className:"w-full text-sm"},
         h('thead',{className:"bg-slate-50 text-slate-500 text-xs uppercase"},h('tr',null,campos.map(c=>h('th',{key:c.id,className:"text-left px-3 py-2"},c.label)),h('th',{className:"text-left px-3 py-2"},"Acciones"))),
-        h('tbody',null,items.map(it=>h('tr',{key:it._id,className:"border-t border-slate-100"},
+        h('tbody',null,itemsFiltrados.map(it=>h('tr',{key:it._id,className:"border-t border-slate-100"},
           campos.map(c=>h('td',{key:c.id,className:"px-3 py-2"},valorMostrado(c,it)),
           ),
           h('td',{className:"px-3 py-2"},h('div',{className:"flex gap-2"},
