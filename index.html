@@ -425,6 +425,7 @@ const AREAS_COLLECTION='inedisav_areas';
 const ASIGNATURAS_COLLECTION='inedisav_asignaturas';
 const ASIGNATURAS_GRADO_COLLECTION='inedisav_asignaturas_grado';
 const ESCALA_COLLECTION='inedisav_escala_valorativa';
+const CATEGORIAS_JUICIO_COLLECTION='inedisav_categorias_juicio';
 const CONVIVENCIA_COLLECTION='inedisav_criterios_convivencia';
 const PROPOSITOS_COLLECTION='inedisav_propositos';
 const periodosStorage=makeCrudStorage(PERIODOS_COLLECTION);
@@ -432,6 +433,7 @@ const areasStorage=makeCrudStorage(AREAS_COLLECTION);
 const asignaturasStorage=makeCrudStorage(ASIGNATURAS_COLLECTION);
 const asignaturasGradoStorage=makeCrudStorage(ASIGNATURAS_GRADO_COLLECTION);
 const escalaStorage=makeCrudStorage(ESCALA_COLLECTION);
+const categoriasJuicioStorage=makeCrudStorage(CATEGORIAS_JUICIO_COLLECTION);
 const convivenciaStorage=makeCrudStorage(CONVIVENCIA_COLLECTION);
 const propositosStorage=makeCrudStorage(PROPOSITOS_COLLECTION);
 
@@ -638,7 +640,7 @@ const Icons = {
 // ═══════════════════════════════════════════
 // Marca de versión visible en el encabezado (junto al botón "Salir") y en la consola del
 // navegador, para verificar rápidamente si el archivo desplegado es el más reciente.
-const APP_VERSION = "2026-08-10-directiva-buscar-v37";
+const APP_VERSION = "2026-08-10-categorias-juicio-buscar-v38";
 console.log("INEDISAV Caracterización — versión cargada:", APP_VERSION);
 const ROLE_LABELS = {admin:"Admin",rector:"Rector",coordinador:"Coordinador",orientacion:"Orientación Escolar",docente:"Docente",auxiliar:"Auxiliar",estudiante:"Estudiante"};
 const ROLE_BADGE  = {admin:"bg-indigo-300 text-indigo-900",rector:"bg-purple-300 text-purple-900",coordinador:"bg-amber-300 text-amber-900",orientacion:"bg-teal-300 text-teal-900",docente:"bg-emerald-300 text-emerald-900",auxiliar:"bg-sky-300 text-sky-900",estudiante:"bg-rose-200 text-rose-900"};
@@ -2131,7 +2133,12 @@ function SeccionCrudSimple({storage,campos,titulo,ayuda,itemLabel,extraCols,titu
     try{ await storage.deleteOne(id); say("Eliminado."); }
     catch(e){ console.error(e); say("No se pudo eliminar.",true); }
   }
-  function editar(it){ setForm(Object.fromEntries(campos.map(c=>[c.id,it[c.id]??(c.default!==undefined?c.default:"")]))); setEditId(it._id); }
+  function editar(it){
+    const base=Object.fromEntries(campos.map(c=>[c.id,it[c.id]??(c.default!==undefined?c.default:"")]));
+    campos.filter(c=>c.type==="select"&&c.buscable).forEach(c=>{ base[`_txt_${c.id}`]=(c.options||[]).find(o=>o.value===base[c.id])?.label||""; });
+    setForm(base);
+    setEditId(it._id);
+  }
 
   // Exportar a Excel: una columna por campo, mostrando la etiqueta (no el id interno) en los select.
   function hExportar(){
@@ -2250,7 +2257,22 @@ ${lfHtml()}
     h('div',{className:"bg-slate-50 border border-slate-200 rounded-xl p-3"},
       h('div',{className:"grid gap-2",style:{gridTemplateColumns:`repeat(${Math.min(campos.filter(c=>c.type!=="computed").length,4)}, minmax(0,1fr))`}},
         campos.filter(c=>c.type!=="computed").map(c=>c.type==="select"
-          ?h('select',{key:c.id,value:form[c.id],onChange:e=>setForm({...form,[c.id]:e.target.value}),className:ic},h('option',{value:""},c.label),(c.options||[]).map(o=>h('option',{key:o.value,value:o.value},o.label)))
+          ?(c.buscable
+              ?h('div',{key:c.id},
+                  h('input',{
+                    list:`dl_${c.id}`,
+                    placeholder:`🔎 ${c.label}`,
+                    value: form[`_txt_${c.id}`] ?? ((c.options||[]).find(o=>o.value===form[c.id])?.label || ""),
+                    onChange:e=>{
+                      const texto=e.target.value;
+                      const opt=(c.options||[]).find(o=>o.label===texto);
+                      setForm(f=>({...f,[c.id]:opt?opt.value:"",[`_txt_${c.id}`]:texto}));
+                    },
+                    className:ic
+                  }),
+                  h('datalist',{id:`dl_${c.id}`},(c.options||[]).map(o=>h('option',{key:o.value,value:o.label})))
+                )
+              :h('select',{key:c.id,value:form[c.id],onChange:e=>setForm({...form,[c.id]:e.target.value}),className:ic},h('option',{value:""},c.label),(c.options||[]).map(o=>h('option',{key:o.value,value:o.value},o.label))))
           :h('input',{key:c.id,type:c.type||"text",placeholder:c.maxLength?`${c.label} (máx ${c.maxLength})`:c.label,maxLength:c.maxLength||undefined,value:form[c.id],onChange:e=>setForm({...form,[c.id]:c.maxLength?e.target.value.slice(0,c.maxLength):e.target.value}),className:ic})
         )
       ),
@@ -2297,6 +2319,7 @@ function DirectivaPanel({onClose}){
     {id:"asignaturas",label:"Asignaturas"},
     {id:"asigGrado",label:"Asignaturas por Grado"},
     {id:"escala",label:"Escala de Valoración"},
+    {id:"categoriasJuicio",label:"Categorías de Juicio"},
     {id:"convivencia",label:"Convivencia"},
     {id:"propositos",label:"Propósitos"}
   ];
@@ -2347,7 +2370,7 @@ function DirectivaPanel({onClose}){
             {id:"anio",label:"Año",type:"number",default:String(new Date().getFullYear())},
             {id:"grado",label:"— Grado —",type:"select",options:GRADO_OPTS},
             {id:"nivel",label:"Nivel Educativo",type:"computed",requerido:false,compute:it=>nivelEducativo(it.grado)},
-            {id:"asignaturaId",label:"— Asignatura —",type:"select",options:asignaturaOpts},
+            {id:"asignaturaId",label:"— Asignatura —",type:"select",options:asignaturaOpts,buscable:true},
             {id:"porcentaje",label:"% en el Área",type:"number",requerido:false},
             {id:"intensidadHoraria",label:"Horas/semana",type:"number",requerido:false}
           ]
@@ -2360,6 +2383,16 @@ function DirectivaPanel({onClose}){
             {id:"rangoMin",label:"Rango mínimo",type:"number"},
             {id:"rangoMax",label:"Rango máximo",type:"number"},
             {id:"orden",label:"Orden",type:"number",default:"1"}
+          ]
+        }),
+        tab==="categoriasJuicio"&&h(SeccionCrudSimple,{
+          storage:categoriasJuicioStorage, itemLabel:"categoría", tituloImpresion:"Categorías de Juicios Valorativos",
+          ayuda:"Los aspectos que se evalúan dentro de cada asignatura (ej. Saber, Saber Hacer, Ser, Observaciones), no la escala de notas.",
+          campos:[
+            {id:"nombre",label:"Nombre Categoría"},
+            {id:"abreviatura",label:"Abreviatura",maxLength:10,requerido:false},
+            {id:"orden",label:"Orden",type:"number",default:"1"},
+            {id:"autoAsignar",label:"Auto asignar",type:"select",options:[{value:"si",label:"Sí"},{value:"no",label:"No"}],default:"si"}
           ]
         }),
         tab==="convivencia"&&h(SeccionCrudSimple,{
