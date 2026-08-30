@@ -428,6 +428,7 @@ const ESCALA_COLLECTION='inedisav_escala_valorativa';
 const CATEGORIAS_JUICIO_COLLECTION='inedisav_categorias_juicio';
 const CONVIVENCIA_COLLECTION='inedisav_criterios_convivencia';
 const PROPOSITOS_COLLECTION='inedisav_propositos';
+const INDICADORES_COLLECTION='inedisav_indicadores';
 const periodosStorage=makeCrudStorage(PERIODOS_COLLECTION);
 const areasStorage=makeCrudStorage(AREAS_COLLECTION);
 const asignaturasStorage=makeCrudStorage(ASIGNATURAS_COLLECTION);
@@ -436,6 +437,7 @@ const escalaStorage=makeCrudStorage(ESCALA_COLLECTION);
 const categoriasJuicioStorage=makeCrudStorage(CATEGORIAS_JUICIO_COLLECTION);
 const convivenciaStorage=makeCrudStorage(CONVIVENCIA_COLLECTION);
 const propositosStorage=makeCrudStorage(PROPOSITOS_COLLECTION);
+const indicadoresStorage=makeCrudStorage(INDICADORES_COLLECTION);
 
 // ═══════════════════════════════════════════
 // AUDITORÍA (registro de acciones importantes)
@@ -640,7 +642,7 @@ const Icons = {
 // ═══════════════════════════════════════════
 // Marca de versión visible en el encabezado (junto al botón "Salir") y en la consola del
 // navegador, para verificar rápidamente si el archivo desplegado es el más reciente.
-const APP_VERSION = "2026-08-10-categorias-juicio-buscar-v38";
+const APP_VERSION = "2026-08-10-indicadores-propositos-v39";
 console.log("INEDISAV Caracterización — versión cargada:", APP_VERSION);
 const ROLE_LABELS = {admin:"Admin",rector:"Rector",coordinador:"Coordinador",orientacion:"Orientación Escolar",docente:"Docente",auxiliar:"Auxiliar",estudiante:"Estudiante"};
 const ROLE_BADGE  = {admin:"bg-indigo-300 text-indigo-900",rector:"bg-purple-300 text-purple-900",coordinador:"bg-amber-300 text-amber-900",orientacion:"bg-teal-300 text-teal-900",docente:"bg-emerald-300 text-emerald-900",auxiliar:"bg-sky-300 text-sky-900",estudiante:"bg-rose-200 text-rose-900"};
@@ -2273,7 +2275,9 @@ ${lfHtml()}
                   h('datalist',{id:`dl_${c.id}`},(c.options||[]).map(o=>h('option',{key:o.value,value:o.label})))
                 )
               :h('select',{key:c.id,value:form[c.id],onChange:e=>setForm({...form,[c.id]:e.target.value}),className:ic},h('option',{value:""},c.label),(c.options||[]).map(o=>h('option',{key:o.value,value:o.value},o.label))))
-          :h('input',{key:c.id,type:c.type||"text",placeholder:c.maxLength?`${c.label} (máx ${c.maxLength})`:c.label,maxLength:c.maxLength||undefined,value:form[c.id],onChange:e=>setForm({...form,[c.id]:c.maxLength?e.target.value.slice(0,c.maxLength):e.target.value}),className:ic})
+          :c.type==="textarea"
+            ?h('textarea',{key:c.id,placeholder:c.label,rows:3,value:form[c.id],onChange:e=>setForm({...form,[c.id]:e.target.value}),className:ic+" md:col-span-2"})
+            :h('input',{key:c.id,type:c.type||"text",placeholder:c.maxLength?`${c.label} (máx ${c.maxLength})`:c.label,maxLength:c.maxLength||undefined,value:form[c.id],onChange:e=>setForm({...form,[c.id]:c.maxLength?e.target.value.slice(0,c.maxLength):e.target.value}),className:ic})
         )
       ),
       h('div',{className:"flex gap-2 mt-2"},
@@ -2305,12 +2309,15 @@ function DirectivaPanel({onClose}){
   const [areas,setAreas]=useState([]);
   const [asignaturas,setAsignaturas]=useState([]);
   const [personal,setPersonal]=useState([]);
+  const [propositos,setPropositos]=useState([]);
   useEffect(()=>{ const unsub=areasStorage.subscribe(setAreas,()=>{}); return ()=>unsub(); },[]);
   useEffect(()=>{ const unsub=asignaturasStorage.subscribe(setAsignaturas,()=>{}); return ()=>unsub(); },[]);
   useEffect(()=>{ const unsub=personalStorage.subscribe(setPersonal,()=>{}); return ()=>unsub(); },[]);
+  useEffect(()=>{ const unsub=propositosStorage.subscribe(setPropositos,()=>{}); return ()=>unsub(); },[]);
   const areaOpts=areas.map(a=>({value:a._id,label:a.nombre}));
   const asignaturaOpts=asignaturas.map(a=>({value:a._id,label:`${a.nombre}${areas.find(ar=>ar._id===a.areaId)?.nombre?" ("+areas.find(ar=>ar._id===a.areaId).nombre+")":""}`}));
   const personalOpts=personal.map(p=>({value:p._id||p.cedula,label:p.nombres})).sort((a,b)=>(a.label||"").localeCompare(b.label||""));
+  const propositoOpts=propositos.map(p=>({value:p._id,label:`${(p.texto||"").slice(0,60)}${p.texto&&p.texto.length>60?"…":""} [${GRADO_OPTS.find(g=>g.value===p.grado)?.label||p.grado||"—"}, P${p.periodo||"?"}]`}));
   const ESTADO_OPTS_AREA=[{value:"activo",label:"✅ Activa"},{value:"inactivo",label:"⛔ Inactiva"}];
 
   const TABS=[
@@ -2321,7 +2328,8 @@ function DirectivaPanel({onClose}){
     {id:"escala",label:"Escala de Valoración"},
     {id:"categoriasJuicio",label:"Categorías de Juicio"},
     {id:"convivencia",label:"Convivencia"},
-    {id:"propositos",label:"Propósitos"}
+    {id:"propositos",label:"Propósitos"},
+    {id:"indicadores",label:"Indicadores"}
   ];
 
   return h('div',{className:"fixed inset-0 bg-black/40 z-50 flex items-center justify-center px-4 py-6 overflow-y-auto"},
@@ -2404,12 +2412,22 @@ function DirectivaPanel({onClose}){
           ]
         }),
         tab==="propositos"&&h(SeccionCrudSimple,{
-          storage:propositosStorage, itemLabel:"propósito", tituloImpresion:"Propósitos por Área y Período",
-          ayuda:"Propósitos/objetivos definidos por área y período (se usarán en los boletines).",
+          storage:propositosStorage, itemLabel:"propósito", tituloImpresion:"Propósitos",
+          ayuda:"Propósitos generales de desarrollo/formación. Para preescolar (Jardín/Transición) van por Grado (no por área). Para primaria en adelante, puedes usar el Área en vez del Grado. Luego, en la pestaña Indicadores, defines los logros específicos de cada propósito.",
           campos:[
-            {id:"areaId",label:"— Área —",type:"select",options:areaOpts},
+            {id:"grado",label:"— Grado (preescolar) —",type:"select",options:GRADO_OPTS,requerido:false},
+            {id:"areaId",label:"— Área (primaria en adelante) —",type:"select",options:areaOpts,requerido:false},
             {id:"periodo",label:"— Período —",type:"select",options:[{value:"1",label:"Período 1"},{value:"2",label:"Período 2"},{value:"3",label:"Período 3"}]},
-            {id:"texto",label:"Texto del propósito"}
+            {id:"texto",label:"Texto del propósito",type:"textarea"}
+          ]
+        }),
+        tab==="indicadores"&&h(SeccionCrudSimple,{
+          storage:indicadoresStorage, itemLabel:"indicador", tituloImpresion:"Indicadores de Logro",
+          ayuda:propositos.length?"Los logros específicos y observables que se marcan/describen para cada estudiante dentro de un propósito (igual que en SIAN: cada Propósito tiene su propia lista de Indicadores).":"Primero crea al menos un propósito en la pestaña anterior.",
+          campos:[
+            {id:"propositoId",label:"— Propósito —",type:"select",options:propositoOpts,buscable:true},
+            {id:"texto",label:"Indicador (descripción del logro)",type:"textarea"},
+            {id:"orden",label:"Orden",type:"number",default:"1",requerido:false}
           ]
         })
       )
