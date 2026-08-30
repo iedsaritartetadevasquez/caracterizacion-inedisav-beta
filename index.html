@@ -638,7 +638,7 @@ const Icons = {
 // ═══════════════════════════════════════════
 // Marca de versión visible en el encabezado (junto al botón "Salir") y en la consola del
 // navegador, para verificar rápidamente si el archivo desplegado es el más reciente.
-const APP_VERSION = "2026-08-10-abreviatura-asignatura-v34";
+const APP_VERSION = "2026-08-10-asiggrado-porcentaje-nivel-v35";
 console.log("INEDISAV Caracterización — versión cargada:", APP_VERSION);
 const ROLE_LABELS = {admin:"Admin",rector:"Rector",coordinador:"Coordinador",orientacion:"Orientación Escolar",docente:"Docente",auxiliar:"Auxiliar",estudiante:"Estudiante"};
 const ROLE_BADGE  = {admin:"bg-indigo-300 text-indigo-900",rector:"bg-purple-300 text-purple-900",coordinador:"bg-amber-300 text-amber-900",orientacion:"bg-teal-300 text-teal-900",docente:"bg-emerald-300 text-emerald-900",auxiliar:"bg-sky-300 text-sky-900",estudiante:"bg-rose-200 text-rose-900"};
@@ -670,6 +670,18 @@ function permisoEstado(valor,role){return (ESTADO_PERMISOS[valor]||[]).includes(
 const TIPO_DOC_OPTS=[{value:"1",label:"1 - Cédula de Ciudadanía"},{value:"2",label:"2 - Tarjeta de Identidad"},{value:"3",label:"3 - Cédula de Extranjería"},{value:"5",label:"5 - Registro Civil de Nacimiento"},{value:"-6",label:"-6 - NIP"},{value:"-7",label:"-7 - NUIP"},{value:"8",label:"8 - Número Secretaría de Educación"},{value:"-9",label:"-9 - Certificado Cabildo"},{value:"10",label:"10 - PEP"},{value:"11",label:"11 - VISA"},{value:"12",label:"12 - TMF"},{value:"13",label:"13 - PPT"}];
 const TIPO_DOC_FAM_OPTS=[{value:"1",label:"1 - Cédula de Ciudadanía"},{value:"2",label:"2 - Tarjeta de Identidad"},{value:"3",label:"3 - Cédula de Extranjería"},{value:"5",label:"5 - Registro Civil de Nacimiento"},{value:"6",label:"6 - NIP"},{value:"7",label:"7 - NUIP"},{value:"8",label:"8 - Número Secretaría"},{value:"9",label:"9 - Certificado Cabildo"},{value:"10",label:"10 - PEP"},{value:"11",label:"11 - VISA"},{value:"12",label:"12 - TMF"},{value:"13",label:"13 - PPT"}];
 const GRADO_OPTS=[{value:"-1",label:"-1 - Jardín"},{value:"0",label:"0 - Transición"},{value:"1",label:"1 - Primero"},{value:"2",label:"2 - Segundo"},{value:"3",label:"3 - Tercero"},{value:"4",label:"4 - Cuarto"},{value:"5",label:"5 - Quinto"},{value:"6",label:"6 - Sexto"},{value:"7",label:"7 - Séptimo"},{value:"8",label:"8 - Octavo"},{value:"9",label:"9 - Noveno"},{value:"10",label:"10 - Décimo"},{value:"11",label:"11 - Undécimo"},{value:"23",label:"23 - Ciclo 3"},{value:"24",label:"24 - Ciclo 4"},{value:"25",label:"25 - Ciclo 5"},{value:"26",label:"26 - Ciclo 6"}];
+// Nivel educativo derivado automáticamente del código de grado (no hay que configurarlo
+// a mano): Preescolar (Jardín/Transición), Primaria (1-5), Secundaria (6-9),
+// Media Académica (10-11), y Educación para Jóvenes y Adultos -Decreto 3011- (ciclos 23-26).
+function nivelEducativo(grado){
+  const n=Number(grado);
+  if(grado==="-1"||grado==="0") return "Preescolar";
+  if(n>=1&&n<=5) return "Primaria";
+  if(n>=6&&n<=9) return "Secundaria";
+  if(n>=10&&n<=11) return "Media Académica";
+  if(n>=23&&n<=26) return "Jóvenes y Adultos (Decreto 3011)";
+  return "—";
+}
 const GRUPO_OPTS=[{value:"",label:"— Sin grupo (grado único) —"},{value:"A",label:"A"},{value:"B",label:"B"},{value:"C",label:"C"},{value:"D",label:"D"},{value:"E",label:"E"},{value:"F",label:"F"}];
 
 // ── Información personal del staff ──
@@ -2096,6 +2108,9 @@ function SeccionCrudSimple({storage,campos,titulo,ayuda,itemLabel,extraCols,titu
   function say(t,err=false){setMsg(t);setMsgErr(err);setTimeout(()=>setMsg(""),3500);}
   function limpiar(){const o={};campos.forEach(c=>o[c.id]=c.default!==undefined?c.default:"");setForm(o);setEditId(null);}
   const etiquetaCampo=(c,val)=>c.type==="select"?((c.options||[]).find(o=>o.value===val)?.label||val||""):(val||"");
+  // Para campos calculados (ej. Nivel Educativo, que sale solo del grado) no hay valor
+  // guardado -- se calcula al vuelo con c.compute(item). Se usa en tabla/exportar/copiar/imprimir.
+  const valorMostrado=(c,it)=>c.type==="computed"?(c.compute?c.compute(it):""):etiquetaCampo(c,it[c.id]??c.default);
 
   async function guardar(){
     const oblig=campos.filter(c=>c.requerido!==false);
@@ -2116,7 +2131,7 @@ function SeccionCrudSimple({storage,campos,titulo,ayuda,itemLabel,extraCols,titu
   // Exportar a Excel: una columna por campo, mostrando la etiqueta (no el id interno) en los select.
   function hExportar(){
     if(!items.length){say("No hay nada que exportar.",true);return;}
-    const rows=items.map(it=>Object.fromEntries(campos.map(c=>[c.label,etiquetaCampo(c,it[c.id]??c.default)])));
+    const rows=items.map(it=>Object.fromEntries(campos.map(c=>[c.label,valorMostrado(c,it)])));
     const ws=XLSX.utils.json_to_sheet(rows);
     const wb=XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb,ws,itemLabel);
@@ -2127,7 +2142,7 @@ function SeccionCrudSimple({storage,campos,titulo,ayuda,itemLabel,extraCols,titu
   async function hCopiar(){
     if(!items.length){say("No hay nada que copiar.",true);return;}
     const encabezado=campos.map(c=>c.label).join("\t");
-    const filas=items.map(it=>campos.map(c=>etiquetaCampo(c,it[c.id]??c.default)).join("\t"));
+    const filas=items.map(it=>campos.map(c=>valorMostrado(c,it)).join("\t"));
     const texto=[encabezado,...filas].join("\n");
     try{ await navigator.clipboard.writeText(texto); say(`${items.length} fila(s) copiada(s). Pégalas donde quieras (Ctrl+V).`); }
     catch(e){ console.error(e); say("No se pudo copiar (el navegador bloqueó el acceso al portapapeles).",true); }
@@ -2136,7 +2151,7 @@ function SeccionCrudSimple({storage,campos,titulo,ayuda,itemLabel,extraCols,titu
   // Imprimir la lista completa en una pestaña nueva, con el encabezado del colegio
   function hImprimir(){
     if(!items.length){say("No hay nada que imprimir.",true);return;}
-    const filas=items.map((it,i)=>`<tr><td>${i+1}</td>${campos.map(c=>`<td class="${c.type==='select'?'':'tn'}">${etiquetaCampo(c,it[c.id]??c.default)}</td>`).join("")}</tr>`).join("");
+    const filas=items.map((it,i)=>`<tr><td>${i+1}</td>${campos.map(c=>`<td class="${c.type==='select'?'':'tn'}">${valorMostrado(c,it)}</td>`).join("")}</tr>`).join("");
     const html=`<!DOCTYPE html><html lang="es"><head><meta charset="UTF-8"><title>${tituloImpresion||itemLabel}</title>
 <style>*{box-sizing:border-box}body{font-family:Arial,sans-serif;margin:18px;font-size:12px}
 @media print{button{display:none!important}}
@@ -2169,9 +2184,10 @@ ${lfHtml()}
       const wb=XLSX.read(buf,{type:"array"});
       const rows=XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]],{defval:""});
       const norm=s=>String(s||"").normalize("NFD").replace(/[\u0300-\u036f]/g,"").trim().toLowerCase();
-      // Los campos de texto/select identifican al registro (su "nombre"); los numéricos y
-      // de fecha son datos que sí se actualizan si el registro ya existe (ej. corregir un %).
-      const camposClave=campos.filter(c=>c.type!=="number"&&c.type!=="date");
+      // Solo los campos de texto/select OBLIGATORIOS identifican al registro (su "clave").
+      // Los opcionales (como Abreviatura) y los numéricos/fecha NO se usan para comparar,
+      // porque si el Excel no trae esa columna, todo quedaría vacío y rompería la detección.
+      const camposClave=campos.filter(c=>c.type!=="number"&&c.type!=="date"&&c.type!=="computed"&&c.requerido!==false);
       const itemsLocal=[...items]; // copia mutable: si el mismo archivo trae la fila repetida, la detecta también
       let ok=0, actualizados=0, saltados=0;
       for(const row of rows){
@@ -2179,12 +2195,18 @@ ${lfHtml()}
         const data={};
         let faltaObligatorio=false;
         for(const c of campos){
+          if(c.type==="computed") continue; // se calcula solo, no se importa ni se guarda
           let raw=claves[norm(c.label)];
           if(raw===undefined) raw=claves[norm(c.id)];
           raw=String(raw??"").trim();
           if(c.maxLength) raw=raw.slice(0,c.maxLength);
           if(c.type==="select"&&raw){
-            const opt=(c.options||[]).find(o=>norm(o.label)===norm(raw)||o.value===raw);
+            // 1) coincidencia exacta con la etiqueta completa, 2) coincidencia con la etiqueta
+            // sin la parte entre paréntesis (ej. "Química" contra "Química (Ciencias Naturales)"),
+            // 3) coincidencia directa con el value.
+            const opt=(c.options||[]).find(o=>norm(o.label)===norm(raw))
+                    || (c.options||[]).find(o=>norm(o.label.split("(")[0])===norm(raw))
+                    || (c.options||[]).find(o=>o.value===raw);
             raw=opt?opt.value:raw;
           }
           if(!raw && c.requerido!==false) faltaObligatorio=true;
@@ -2219,8 +2241,8 @@ ${lfHtml()}
       h('button',{onClick:hImprimir,className:"px-3 py-1.5 border border-slate-200 text-slate-700 rounded-lg text-xs font-medium hover:bg-slate-50"},"🖨️ Imprimir")
     ),
     h('div',{className:"bg-slate-50 border border-slate-200 rounded-xl p-3"},
-      h('div',{className:"grid gap-2",style:{gridTemplateColumns:`repeat(${Math.min(campos.length,4)}, minmax(0,1fr))`}},
-        campos.map(c=>c.type==="select"
+      h('div',{className:"grid gap-2",style:{gridTemplateColumns:`repeat(${Math.min(campos.filter(c=>c.type!=="computed").length,4)}, minmax(0,1fr))`}},
+        campos.filter(c=>c.type!=="computed").map(c=>c.type==="select"
           ?h('select',{key:c.id,value:form[c.id],onChange:e=>setForm({...form,[c.id]:e.target.value}),className:ic},h('option',{value:""},c.label),(c.options||[]).map(o=>h('option',{key:o.value,value:o.value},o.label)))
           :h('input',{key:c.id,type:c.type||"text",placeholder:c.maxLength?`${c.label} (máx ${c.maxLength})`:c.label,maxLength:c.maxLength||undefined,value:form[c.id],onChange:e=>setForm({...form,[c.id]:c.maxLength?e.target.value.slice(0,c.maxLength):e.target.value}),className:ic})
         )
@@ -2236,7 +2258,7 @@ ${lfHtml()}
       h('table',{className:"w-full text-sm"},
         h('thead',{className:"bg-slate-50 text-slate-500 text-xs uppercase"},h('tr',null,campos.map(c=>h('th',{key:c.id,className:"text-left px-3 py-2"},c.label)),h('th',{className:"text-left px-3 py-2"},"Acciones"))),
         h('tbody',null,items.map(it=>h('tr',{key:it._id,className:"border-t border-slate-100"},
-          campos.map(c=>h('td',{key:c.id,className:"px-3 py-2"},etiquetaCampo(c,it[c.id]??c.default)),
+          campos.map(c=>h('td',{key:c.id,className:"px-3 py-2"},valorMostrado(c,it)),
           ),
           h('td',{className:"px-3 py-2"},h('div',{className:"flex gap-2"},
             h('button',{onClick:()=>editar(it),className:"text-xs px-2 py-1 border border-slate-200 rounded hover:bg-slate-50"},"Editar"),
@@ -2312,10 +2334,13 @@ function DirectivaPanel({onClose}){
         }),
         tab==="asigGrado"&&h(SeccionCrudSimple,{
           storage:asignaturasGradoStorage, itemLabel:"asignación", tituloImpresion:"Asignaturas por Grado",
-          ayuda:asignaturas.length?"Qué asignaturas se dictan en cada grado, y su intensidad horaria semanal.":"Primero crea al menos una asignatura en la pestaña anterior.",
+          ayuda:asignaturas.length?"Qué asignaturas se dictan en cada grado, su intensidad horaria semanal, y el % que representa dentro de su área (cuando un área se subdivide en varias asignaturas, ej. Ciencias Naturales = Química + Física + Biología, deben sumar 100%). El nivel educativo se calcula solo a partir del grado.":"Primero crea al menos una asignatura en la pestaña anterior.",
           campos:[
+            {id:"anio",label:"Año",type:"number",default:String(new Date().getFullYear())},
             {id:"grado",label:"— Grado —",type:"select",options:GRADO_OPTS},
+            {id:"nivel",label:"Nivel Educativo",type:"computed",requerido:false,compute:it=>nivelEducativo(it.grado)},
             {id:"asignaturaId",label:"— Asignatura —",type:"select",options:asignaturaOpts},
+            {id:"porcentaje",label:"% en el Área",type:"number",requerido:false},
             {id:"intensidadHoraria",label:"Horas/semana",type:"number",requerido:false}
           ]
         }),
