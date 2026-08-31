@@ -642,7 +642,7 @@ const Icons = {
 // ═══════════════════════════════════════════
 // Marca de versión visible en el encabezado (junto al botón "Salir") y en la consola del
 // navegador, para verificar rápidamente si el archivo desplegado es el más reciente.
-const APP_VERSION = "2026-08-10-indicadores-propositos-v39";
+const APP_VERSION = "2026-08-10-carga-academica-v40";
 console.log("INEDISAV Caracterización — versión cargada:", APP_VERSION);
 const ROLE_LABELS = {admin:"Admin",rector:"Rector",coordinador:"Coordinador",orientacion:"Orientación Escolar",docente:"Docente",auxiliar:"Auxiliar",estudiante:"Estudiante"};
 const ROLE_BADGE  = {admin:"bg-indigo-300 text-indigo-900",rector:"bg-purple-300 text-purple-900",coordinador:"bg-amber-300 text-amber-900",orientacion:"bg-teal-300 text-teal-900",docente:"bg-emerald-300 text-emerald-900",auxiliar:"bg-sky-300 text-sky-900",estudiante:"bg-rose-200 text-rose-900"};
@@ -1342,6 +1342,8 @@ function UserSettings({onClose, currentUid, usuario, rolActual}){
   const [filtroRol,setFiltroRol]=useState("");
   const [filtroEstado,setFiltroEstado]=useState("");
   const [grados,setGrados]=useState([]);
+  const [asigGrado,setAsigGrado]=useState([]);
+  const [asignaturas,setAsignaturas]=useState([]);
   const [cursosAbiertoUid,setCursosAbiertoUid]=useState("");
   const ic="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400";
 
@@ -1350,9 +1352,18 @@ function UserSettings({onClose, currentUid, usuario, rolActual}){
     return ()=>unsub();
   },[]);
   useEffect(()=>{ const unsub=gradosStorage.subscribe(setGrados,()=>{}); return ()=>unsub(); },[]);
-  // Combinaciones grado+grupo disponibles para marcar como "cursos que dicta" (asistencia/notas)
+  useEffect(()=>{ const unsub=asignaturasGradoStorage.subscribe(setAsigGrado,()=>{}); return ()=>unsub(); },[]);
+  useEffect(()=>{ const unsub=asignaturasStorage.subscribe(setAsignaturas,()=>{}); return ()=>unsub(); },[]);
+  // Combinaciones grado+grupo disponibles para marcar como "cursos que dicta" (asistencia)
   const cursosDisponibles=[...new Map(grados.map(g=>[`${g.gradoBase}|${g.grupo||""}`,{grado:g.gradoBase,grupo:g.grupo||""}])).values()]
     .sort((a,b)=>(a.grado+a.grupo).localeCompare(b.grado+b.grupo));
+  // Asignaturas configuradas para un grado específico (viene de Directiva → Asignaturas por Grado)
+  function asignaturasDeGrado(grado){
+    return asigGrado.filter(ag=>ag.grado===grado).map(ag=>{
+      const a=asignaturas.find(x=>x._id===ag.asignaturaId);
+      return {asignaturaId:ag.asignaturaId, nombre:a?.nombre||"(asignatura eliminada)"};
+    });
+  }
 
   function say(t,isErr=false,dur){setMsg(t);setMsgErr(isErr);setTimeout(()=>setMsg(""),dur||4000);}
 
@@ -1396,6 +1407,22 @@ function UserSettings({onClose, currentUid, usuario, rolActual}){
     const nuevo=actual.includes(clave)?actual.filter(c=>c!==clave):[...actual,clave];
     try{ await usersStorage.updateUser(u.uid,{gradosAsistencia:nuevo}); }
     catch(e){ console.error(e); say("No se pudo actualizar los cursos: "+e.message,true); }
+  }
+  // Marca/desmarca una asignatura específica dentro de un grado+grupo (la carga académica real).
+  // De paso mantiene sincronizado gradosAsistencia (grado+grupo, sin distinguir asignatura) para
+  // que el acceso a Asistencia siga funcionando exactamente igual que antes.
+  async function toggleAsignaturaCurso(u,curso,asignaturaId){
+    const clave3=`${curso.grado}|${curso.grupo}|${asignaturaId}`;
+    const clave2=`${curso.grado}|${curso.grupo}`;
+    const carga=u.cargaAcademica||[];
+    const nuevaCarga=carga.includes(clave3)?carga.filter(c=>c!==clave3):[...carga,clave3];
+    const quedaAlgunaDeEsteCurso=nuevaCarga.some(c=>c.startsWith(clave2+"|"));
+    const asistActual=u.gradosAsistencia||[];
+    let nuevaAsist=asistActual;
+    if(quedaAlgunaDeEsteCurso && !asistActual.includes(clave2)) nuevaAsist=[...asistActual,clave2];
+    if(!quedaAlgunaDeEsteCurso && asistActual.includes(clave2)) nuevaAsist=asistActual.filter(c=>c!==clave2);
+    try{ await usersStorage.updateUser(u.uid,{cargaAcademica:nuevaCarga, gradosAsistencia:nuevaAsist}); }
+    catch(e){ console.error(e); say("No se pudo actualizar la carga académica: "+e.message,true); }
   }
   async function resend(u){
     try{ await usersStorage.resendReset(u.email); registrarAuditoria(usuario,rolActual,"REENVIAR_CLAVE",u.email); say(`Correo de recuperación reenviado a ${u.email}.`); }
@@ -1505,7 +1532,7 @@ function UserSettings({onClose, currentUid, usuario, rolActual}){
             h('td',{className:"px-3 py-2"},u.role==="docente"?h('select',{value:u.grado||"",onChange:e=>changeGrado(u,e.target.value),className:"border border-slate-200 rounded px-2 py-1 text-xs"},h('option',{value:""},"— Sin asignar —"),GRADO_OPTS.map(g=>h('option',{key:g.value,value:g.value},g.label))):h('span',{className:"text-slate-300"},"—")),
             h('td',{className:"px-3 py-2"},u.role==="docente"?h('select',{value:u.grupo||"",onChange:e=>changeGrupo(u,e.target.value),className:"border border-slate-200 rounded px-2 py-1 text-xs"},GRUPO_OPTS.map(g=>h('option',{key:g.value,value:g.value},g.label||"Grupo"))):h('span',{className:"text-slate-300"},"—")),
             h('td',{className:"px-3 py-2"},u.role==="docente"
-              ?h('button',{onClick:()=>setCursosAbiertoUid(cursosAbiertoUid===u.uid?"":u.uid),className:"text-xs px-2 py-1 border border-indigo-200 text-indigo-700 rounded hover:bg-indigo-50"},`${(u.gradosAsistencia||[]).length} curso(s) ✎`)
+              ?h('button',{onClick:()=>setCursosAbiertoUid(cursosAbiertoUid===u.uid?"":u.uid),className:"text-xs px-2 py-1 border border-indigo-200 text-indigo-700 rounded hover:bg-indigo-50"},`${(u.cargaAcademica||[]).length} asignatura(s) ✎`)
               :h('span',{className:"text-slate-300"},"—")),
             h('td',{className:"px-3 py-2"},h('span',{className:`px-2 py-0.5 rounded-full text-xs font-medium ${u.activo?"bg-emerald-100 text-emerald-700":"bg-slate-200 text-slate-500"}`},u.activo?"Activo":"Inactivo")),
             h('td',{className:"px-3 py-2"},h('div',{className:"flex gap-2"},
@@ -1517,14 +1544,30 @@ function UserSettings({onClose, currentUid, usuario, rolActual}){
             ),
             cursosAbiertoUid===u.uid&&h('tr',{className:"bg-indigo-50/50 border-t border-indigo-100"},
               h('td',{colSpan:8,className:"px-4 py-3"},
-                h('p',{className:"text-xs text-slate-600 mb-2"},h('strong',null,"Cursos donde dicta clase"),' (para marcar Asistencia y Notas — independiente de si es tutor/director de grupo). El grado/grupo de tutor de arriba sigue siendo el único que puede ver y editar en Comisión.'),
+                h('p',{className:"text-xs text-slate-600 mb-2"},h('strong',null,"Carga académica"),' — grados/grupos y las asignaturas específicas que dicta ahí (habilita Asistencia y, más adelante, Evaluaciones de esa asignatura). El grado/grupo de tutor de arriba sigue siendo el único que puede ver y editar en Comisión.'),
                 !cursosDisponibles.length?h('p',{className:"text-xs text-amber-600"},"Primero crea los grados/grupos en la pantalla de Grados y Grupos."):
-                h('div',{className:"flex flex-wrap gap-2"},
+                h('div',{className:"space-y-2"},
                   cursosDisponibles.map(c=>{
-                    const clave=`${c.grado}|${c.grupo}`;
-                    const activo=(u.gradosAsistencia||[]).includes(clave);
+                    const clave2=`${c.grado}|${c.grupo}`;
                     const etiqueta=(GRADO_OPTS.find(g=>g.value===c.grado)?.label?.split(" - ")[1]||c.grado)+(c.grupo?" - "+c.grupo:"");
-                    return h('button',{key:clave,onClick:()=>toggleCurso(u,c),className:`px-2.5 py-1 rounded-full text-xs font-medium border ${activo?"bg-indigo-600 text-white border-indigo-600":"bg-white text-slate-600 border-slate-200 hover:bg-slate-50"}`},etiqueta);
+                    const asigs=asignaturasDeGrado(c.grado);
+                    if(!asigs.length){
+                      const activo=(u.gradosAsistencia||[]).includes(clave2);
+                      return h('div',{key:clave2,className:"flex items-center gap-2"},
+                        h('button',{onClick:()=>toggleCurso(u,c),className:`px-2.5 py-1 rounded-full text-xs font-medium border ${activo?"bg-indigo-600 text-white border-indigo-600":"bg-white text-slate-600 border-slate-200 hover:bg-slate-50"}`},etiqueta),
+                        h('span',{className:"text-[11px] text-slate-400"},"(sin asignaturas configuradas en Directiva → solo habilita asistencia)")
+                      );
+                    }
+                    return h('div',{key:clave2,className:"border border-slate-200 rounded-lg p-2 bg-white"},
+                      h('p',{className:"text-xs font-semibold text-slate-700 mb-1"},etiqueta),
+                      h('div',{className:"flex flex-wrap gap-1.5"},
+                        asigs.map(a=>{
+                          const clave3=`${clave2}|${a.asignaturaId}`;
+                          const activo=(u.cargaAcademica||[]).includes(clave3);
+                          return h('button',{key:a.asignaturaId,onClick:()=>toggleAsignaturaCurso(u,c,a.asignaturaId),className:`px-2 py-0.5 rounded-full text-[11px] font-medium border ${activo?"bg-indigo-600 text-white border-indigo-600":"bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100"}`},a.nombre);
+                        })
+                      )
+                    );
                   })
                 )
               )
