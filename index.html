@@ -642,7 +642,7 @@ const Icons = {
 // ═══════════════════════════════════════════
 // Marca de versión visible en el encabezado (junto al botón "Salir") y en la consola del
 // navegador, para verificar rápidamente si el archivo desplegado es el más reciente.
-const APP_VERSION = "2026-08-10-carga-academica-v40";
+const APP_VERSION = "2026-08-10-importar-sian-v41";
 console.log("INEDISAV Caracterización — versión cargada:", APP_VERSION);
 const ROLE_LABELS = {admin:"Admin",rector:"Rector",coordinador:"Coordinador",orientacion:"Orientación Escolar",docente:"Docente",auxiliar:"Auxiliar",estudiante:"Estudiante"};
 const ROLE_BADGE  = {admin:"bg-indigo-300 text-indigo-900",rector:"bg-purple-300 text-purple-900",coordinador:"bg-amber-300 text-amber-900",orientacion:"bg-teal-300 text-teal-900",docente:"bg-emerald-300 text-emerald-900",auxiliar:"bg-sky-300 text-sky-900",estudiante:"bg-rose-200 text-rose-900"};
@@ -685,6 +685,88 @@ function nivelEducativo(grado){
   if(n>=10&&n<=11) return "Media Académica";
   if(n>=23&&n<=26) return "Jóvenes y Adultos (Decreto 3011)";
   return "—";
+}
+
+// ═══════════════════════════════════════════
+// IMPORTADOR DE CARGA ACADÉMICA DESDE SIAN365
+// Lee el Excel "Docentes por Grupo" exportado de SIAN (columnas: Area,
+// Nombre Asignatura, Semestre, Abrev, Nombre Curso, Nombre Docente, I.H.)
+// y arma automáticamente: Áreas, Asignaturas, Asignaturas por Grado (con su
+// intensidad horaria), y la Carga Académica de cada docente.
+// ═══════════════════════════════════════════
+const _normNombre=s=>String(s||"").normalize("NFD").replace(/[\u0300-\u036f]/g,"").trim().toLowerCase();
+// Compara nombres sin importar el orden de las palabras (SIAN usa "Apellidos Nombres",
+// nuestro sistema puede tenerlo al revés) -- junta y ordena las palabras de cada uno.
+const _palabrasNombre=s=>_normNombre(s).split(/\s+/).filter(Boolean).sort().join(" ");
+const NOMBRE_GRADO_A_VALOR={
+  "jardin":"-1","transicion":"0","primero":"1","segundo":"2","tercero":"3","cuarto":"4","quinto":"5",
+  "sexto":"6","septimo":"7","octavo":"8","noveno":"9","decimo":"10","undecimo":"11",
+  "ciclo 3":"23","ciclo 4":"24","ciclo 5":"25","ciclo 6":"26"
+};
+// "Jardin A SEDE 1" -> {grado:"-1", grupo:"A"} (quita "SEDE N" y saca el grupo como la última palabra)
+function parseCursoSIAN(nombreCurso){
+  let texto=_normNombre(nombreCurso).replace(/\bsede\s*\d+\b/g,"").trim();
+  const partes=texto.split(/\s+/).filter(Boolean);
+  if(!partes.length) return null;
+  const grupo=(partes[partes.length-1]||"").toUpperCase();
+  const nombreGrado=partes.slice(0,-1).join(" ");
+  const grado=NOMBRE_GRADO_A_VALOR[nombreGrado];
+  return grado?{grado,grupo:/^[A-Z]$/.test(grupo)?grupo:""}:null;
+}
+
+async function importarCargaAcademicaSIAN(rows){
+  const resultado={areasCreadas:0,asigCreadas:0,asigGradoCreadas:0,asigGradoActualizadas:0,docentesAsignados:0,docentesNoEncontrados:new Set(),filasSaltadas:0};
+  if(!db) return resultado;
+
+  const [areasSnap,asigSnap,asigGradoSnap,usuariosSnap]=await Promise.all([
+    db.collection(AREAS_COLLECTION).get(),
+    db.collection(ASIGNATURAS_COLLECTION).get(),
+    db.collection(ASIGNATURAS_GRADO_COLLECTION).get(),
+    db.collection(USERS_COLLECTION).get()
+  ]);
+  const areas=areasSnap.docs.map(d=>({_id:d.id,...d.data()}));
+  const asignaturas=asigSnap.docs.map(d=>({_id:d.id,...d.data()}));
+  const asigGrado=asigGradoSnap.docs.map(d=>({_id:d.id,...d.data()}));
+  const usuarios=usuariosSnap.docs.map(d=>({uid:d.id,...d.data()}));
+  const cambiosDocente={};
+
+  for(const row of rows){
+    const areaNombre=String(row["Area"]??"").trim();
+    const asigNombre=String(row["Nombre Asignatura"]??"").trim();
+    const abrev=String(row["Abrev"]??"").trim().slice(0,5);
+    const cursoNombre=String(row["Nombre Curso"]??"").trim();
+    const docenteNombre=String(row["Nombre Docente"]??"").trim();
+    const ih=Number(row["I.H."]||0)||"";
+    const anio=String(row["Semestre"]||new Date().getFullYear());
+    if(!areaNombre||!asigNombre||!cursoNombre){ resultado.filasSaltadas++; continue; }
+
+    let area=areas.find(a=>_normNombre(a.nombre)===_normNombre(areaNombre));
+    if(!area){ const id=await areasStorage.saveOne({nombre:areaNombre,activo:"activo"}); area={_id:id,nombre:areaNombre}; areas.push(area); resultado.areasCreadas++; }
+
+    let asig=asignaturas.find(a=>_normNombre(a.nombre)===_normNombre(asigNombre)&&a.areaId===area._id);
+    if(!asig){ const id=await asignaturasStorage.saveOne({nombre:asigNombre,abreviatura:abrev,areaId:area._id}); asig={_id:id,nombre:asigNombre,abreviatura:abrev,areaId:area._id}; asignaturas.push(asig); resultado.asigCreadas++; }
+
+    const curso=parseCursoSIAN(cursoNombre);
+    if(!curso){ resultado.filasSaltadas++; continue; }
+
+    let ag=asigGrado.find(x=>x.grado===curso.grado&&x.asignaturaId===asig._id);
+    if(!ag){ const id=await asignaturasGradoStorage.saveOne({grado:curso.grado,asignaturaId:asig._id,intensidadHoraria:ih,anio}); ag={_id:id,grado:curso.grado,asignaturaId:asig._id,intensidadHoraria:ih,anio}; asigGrado.push(ag); resultado.asigGradoCreadas++; }
+    else if(ih && String(ag.intensidadHoraria)!==String(ih)){ await asignaturasGradoStorage.saveOne({...ag,_id:ag._id,intensidadHoraria:ih}); ag.intensidadHoraria=ih; resultado.asigGradoActualizadas++; }
+
+    const docente=usuarios.find(u=>u.role==="docente"&&_palabrasNombre(u.nombre)===_palabrasNombre(docenteNombre));
+    if(!docente){ resultado.docentesNoEncontrados.add(docenteNombre); continue; }
+    const clave3=`${curso.grado}|${curso.grupo}|${asig._id}`;
+    const clave2=`${curso.grado}|${curso.grupo}`;
+    if(!cambiosDocente[docente.uid]) cambiosDocente[docente.uid]={cargaAcademica:new Set(docente.cargaAcademica||[]),gradosAsistencia:new Set(docente.gradosAsistencia||[])};
+    cambiosDocente[docente.uid].cargaAcademica.add(clave3);
+    cambiosDocente[docente.uid].gradosAsistencia.add(clave2);
+  }
+
+  for(const uid of Object.keys(cambiosDocente)){
+    await usersStorage.updateUser(uid,{cargaAcademica:[...cambiosDocente[uid].cargaAcademica],gradosAsistencia:[...cambiosDocente[uid].gradosAsistencia]});
+    resultado.docentesAsignados++;
+  }
+  return resultado;
 }
 const GRUPO_OPTS=[{value:"",label:"— Sin grupo (grado único) —"},{value:"A",label:"A"},{value:"B",label:"B"},{value:"C",label:"C"},{value:"D",label:"D"},{value:"E",label:"E"},{value:"F",label:"F"}];
 
@@ -2478,6 +2560,60 @@ function DirectivaPanel({onClose}){
   );
 }
 
+// Modal para importar la Carga Académica directo desde el Excel exportado de SIAN
+// ("Docentes por Grupo → Exportar a Excel"). Crea/actualiza Áreas, Asignaturas,
+// Asignaturas por Grado, y asigna la carga a cada docente que ya tenga cuenta.
+function ImportarCargaAcademicaModal({onClose}){
+  const [procesando,setProcesando]=useState(false);
+  const [resultado,setResultado]=useState(null);
+  const [error,setError]=useState("");
+  const fileRef=useRef(null);
+
+  async function procesar(file){
+    if(!file) return;
+    setProcesando(true); setError(""); setResultado(null);
+    try{
+      const buf=await file.arrayBuffer();
+      const wb=XLSX.read(buf,{type:"array"});
+      const rows=XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]],{defval:""});
+      if(!rows.length){ setError("El archivo no tiene filas de datos."); setProcesando(false); return; }
+      const r=await importarCargaAcademicaSIAN(rows);
+      setResultado(r);
+    }catch(e){ console.error(e); setError("No se pudo procesar el archivo: "+e.message); }
+    setProcesando(false);
+    if(fileRef.current) fileRef.current.value="";
+  }
+
+  return h('div',{className:"fixed inset-0 bg-black/40 z-50 flex items-center justify-center px-4 py-6 overflow-y-auto"},
+    h('div',{className:"bg-white rounded-2xl shadow-xl w-full max-w-lg p-6 my-auto max-h-[90vh] flex flex-col"},
+      h('div',{className:"flex items-center justify-between mb-4"},
+        h('h2',{className:"text-base font-semibold text-slate-800"},"📥 Importar Carga Académica (SIAN)"),
+        h('button',{onClick:onClose,className:"text-slate-400 hover:text-slate-600"},h(Icons.X))
+      ),
+      h('p',{className:"text-xs text-slate-500 mb-4"},'Sube el Excel que exportaste de SIAN en "Docentes por Grupo → Exportar a Excel" (columnas: Area, Nombre Asignatura, Semestre, Abrev, Nombre Curso, Nombre Docente, I.H.). Va a crear las Áreas/Asignaturas que falten, cargar la intensidad horaria por grado, y asignar la carga a cada docente que YA tenga cuenta creada en el sistema.'),
+      !resultado&&h('button',{disabled:procesando,onClick:()=>fileRef.current?.click(),className:"px-4 py-2.5 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-700 disabled:opacity-60"},procesando?"Procesando (puede tardar unos minutos)...":"Seleccionar archivo Excel"),
+      h('input',{ref:fileRef,type:"file",accept:".xlsx,.xls",className:"hidden",onChange:e=>procesar(e.target.files?.[0])}),
+      error&&h('p',{className:"text-sm text-rose-600 mt-3"},error),
+      resultado&&h('div',{className:"mt-2 space-y-3"},
+        h('div',{className:"bg-emerald-50 border border-emerald-200 rounded-lg p-3 text-sm text-emerald-800"},
+          h('p',null,"✅ Áreas creadas: ",h('strong',null,resultado.areasCreadas)),
+          h('p',null,"✅ Asignaturas creadas: ",h('strong',null,resultado.asigCreadas)),
+          h('p',null,"✅ Asignaturas por Grado creadas: ",h('strong',null,resultado.asigGradoCreadas)," / actualizadas: ",h('strong',null,resultado.asigGradoActualizadas)),
+          h('p',null,"✅ Docentes con carga académica asignada: ",h('strong',null,resultado.docentesAsignados)),
+          resultado.filasSaltadas>0&&h('p',{className:"text-amber-700"},"⚠️ Filas saltadas (datos incompletos): ",resultado.filasSaltadas)
+        ),
+        resultado.docentesNoEncontrados.size>0&&h('div',{className:"bg-amber-50 border border-amber-200 rounded-lg p-3 text-sm text-amber-800"},
+          h('p',{className:"font-semibold mb-1"},`⚠️ ${resultado.docentesNoEncontrados.size} docente(s) del Excel no tienen cuenta creada en el sistema (no se les pudo asignar carga):`),
+          h('ul',{className:"list-disc list-inside max-h-40 overflow-y-auto"},[...resultado.docentesNoEncontrados].sort().map(n=>h('li',{key:n},n))),
+          h('p',{className:"mt-2 text-xs"},'Créalos en Gestión de Usuarios → "Agregar usuario" (mismo nombre completo) y vuelve a importar este mismo archivo — se saltará lo que ya está hecho y solo completará lo que falta.')
+        ),
+        h('button',{onClick:()=>setResultado(null),className:"text-xs text-indigo-600 underline"},"Importar otro archivo")
+      ),
+      h('div',{className:"flex justify-end mt-4"},h('button',{onClick:onClose,className:"px-4 py-2 border border-slate-200 rounded-lg text-sm hover:bg-slate-50"},"Cerrar"))
+    )
+  );
+}
+
 function ComisionView({students,role,usuario,gradoFijo,grupoFijo,onSave}){
   const soyDocente=role==="docente";
   const [grado,setGrado]=useState(soyDocente?(gradoFijo||""):"");
@@ -3262,6 +3398,7 @@ function App(){
   const [showSettings,setShowSettings]=useState(false);
   const [showGrados,setShowGrados]=useState(false);
   const [showDirectiva,setShowDirectiva]=useState(false);
+  const [showImportCarga,setShowImportCarga]=useState(false);
   const [showAuditoria,setShowAuditoria]=useState(false);
   const [showCompletitud,setShowCompletitud]=useState(false);
   const [showMiInfo,setShowMiInfo]=useState(false);
@@ -3615,6 +3752,7 @@ function App(){
             canManageUsers&&h('button',{onClick:()=>{setShowSettings(true);setShowToolsMenu(false);},className:"w-full text-left px-4 py-2 text-sm hover:bg-slate-50 flex items-center gap-2"},"⚙️ Gestión de Usuarios"),
             isAdmin&&h('button',{onClick:()=>{setShowGrados(true);setShowToolsMenu(false);},className:"w-full text-left px-4 py-2 text-sm hover:bg-slate-50 flex items-center gap-2"},"🎓 Grados y Tutores"),
             (isAdmin||role==="rector")&&h('button',{onClick:()=>{setShowDirectiva(true);setShowToolsMenu(false);},className:"w-full text-left px-4 py-2 text-sm hover:bg-slate-50 flex items-center gap-2"},"🏛️ Directiva"),
+            isAdmin&&h('button',{onClick:()=>{setShowImportCarga(true);setShowToolsMenu(false);},className:"w-full text-left px-4 py-2 text-sm hover:bg-slate-50 flex items-center gap-2"},"📥 Importar Carga Académica (SIAN)"),
             isAdmin&&h('button',{onClick:()=>{setShowAuditoria(true);setShowToolsMenu(false);},className:"w-full text-left px-4 py-2 text-sm hover:bg-slate-50 flex items-center gap-2"},"🕒 Auditoría"),
             isAdmin&&h('button',{onClick:()=>{setShowCompletitud(true);setShowToolsMenu(false);},className:"w-full text-left px-4 py-2 text-sm hover:bg-slate-50 flex items-center gap-2"},"📊 Completitud de Datos"),
             isAdmin&&h('button',{onClick:()=>{hNormalize();setShowToolsMenu(false);},className:"w-full text-left px-4 py-2 text-sm hover:bg-slate-50 flex items-center gap-2"},"🧹 Normalizar Datos Existentes"),
@@ -3631,6 +3769,7 @@ function App(){
     showSettings&&h(UserSettings,{onClose:()=>setShowSettings(false),currentUid:session.uid,usuario:session.nombre||session.email,rolActual:role}),
     showGrados&&h(GradosTutoresPanel,{onClose:()=>setShowGrados(false),usuario:session.nombre||session.email,rolActual:role}),
     showDirectiva&&h(DirectivaPanel,{onClose:()=>setShowDirectiva(false)}),
+    showImportCarga&&h(ImportarCargaAcademicaModal,{onClose:()=>setShowImportCarga(false)}),
     showAuditoria&&h(AuditoriaPanel,{onClose:()=>setShowAuditoria(false)}),
     showCompletitud&&h(CompletitudPanel,{students,onClose:()=>setShowCompletitud(false)}),
     showMiInfo&&h(MiInformacionModal,{onClose:()=>setShowMiInfo(false),usuario:session.nombre||session.email,rol:role,correo:session.email}),
