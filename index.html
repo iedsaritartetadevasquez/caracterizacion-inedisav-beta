@@ -642,7 +642,7 @@ const Icons = {
 // ═══════════════════════════════════════════
 // Marca de versión visible en el encabezado (junto al botón "Salir") y en la consola del
 // navegador, para verificar rápidamente si el archivo desplegado es el más reciente.
-const APP_VERSION = "2026-08-10-importar-sian-v41";
+const APP_VERSION = "2026-08-31-modulo-docentes-v42";
 console.log("INEDISAV Caracterización — versión cargada:", APP_VERSION);
 const ROLE_LABELS = {admin:"Admin",rector:"Rector",coordinador:"Coordinador",orientacion:"Orientación Escolar",docente:"Docente",auxiliar:"Auxiliar",estudiante:"Estudiante"};
 const ROLE_BADGE  = {admin:"bg-indigo-300 text-indigo-900",rector:"bg-purple-300 text-purple-900",coordinador:"bg-amber-300 text-amber-900",orientacion:"bg-teal-300 text-teal-900",docente:"bg-emerald-300 text-emerald-900",auxiliar:"bg-sky-300 text-sky-900",estudiante:"bg-rose-200 text-rose-900"};
@@ -794,6 +794,51 @@ const PERSONAL_FIELD_DEFS=[
   {id:"direccionResidencia",label:"Dirección de residencia",type:"text"},
   {id:"municipioResidencia",label:"Municipio de residencia",type:"text"},
 ];
+// ═══════════════════════════════════════════
+// MÓDULO DOCENTES (académico, separado de Gestión de Usuarios/cuentas):
+// registro, docentes por asignatura/grupo, y carga académica. Todo funciona
+// a partir de inedisav_personal -- NO requiere que el docente tenga cuenta/login
+// creado todavía, a diferencia de la carga académica vieja (usersStorage.cargaAcademica).
+// ═══════════════════════════════════════════
+// Tipos de "inedisav_personal" que cuentan como docente para este módulo (se excluye Administrativo).
+const DOCENTE_TIPOS=["DOCENTE DE AULA","DIRECTIVO DOCENTE","ORIENTADORA","DOCENTE ORIENTADORES"];
+// Envoltorio de personalStorage que solo muestra/crea personal de tipo docente,
+// para poder reusar SeccionCrudSimple tal cual en la pestaña "Registro de docentes".
+const docentesPersonalStorage={
+  subscribe(onData,onError){
+    return personalStorage.subscribe(list=>onData(list.filter(p=>DOCENTE_TIPOS.includes(p.tipoPersonal))),onError);
+  },
+  async saveOne(data){ return personalStorage.saveOne({tipoPersonal:DOCENTE_TIPOS[0],...data}); },
+  async deleteOne(id){ return personalStorage.deleteOne(id); }
+};
+const CARGA_ACADEMICA_COLLECTION='inedisav_carga_academica';
+// id determinístico: docente+grado+grupo+asignatura+año -- así dos docentes nunca pueden
+// "chocar" en el mismo cupo (el segundo simplemente sobrescribiría el mismo documento).
+function idCargaAcademica(docenteId,grado,grupo,asignaturaId,anio){ return `${docenteId}|${grado}|${grupo||""}|${asignaturaId}|${anio}`; }
+const cargaAcademicaStorage={
+  subscribe(onData,onError){
+    if(!db){ onData([]); return ()=>{}; }
+    return db.collection(CARGA_ACADEMICA_COLLECTION).onSnapshot(
+      snap=>onData(snap.docs.map(d=>({_id:d.id,...d.data()}))),
+      err=>{ console.error('Error listando carga académica:',err); onError&&onError(err); }
+    );
+  },
+  // Guarda en un solo lote (batch) todo lo que cambió para un docente/año: agrega lo marcado
+  // nuevo y borra lo que se desmarcó, comparando la selección actual contra la que había al abrir.
+  async guardarLote(docenteId,anio,seleccionActual,seleccionOriginal){
+    if(!db) return;
+    const batch=db.batch();
+    [...seleccionActual].filter(k=>!seleccionOriginal.has(k)).forEach(clave=>{
+      const [grado,grupo,asignaturaId]=clave.split('|');
+      batch.set(db.collection(CARGA_ACADEMICA_COLLECTION).doc(idCargaAcademica(docenteId,grado,grupo,asignaturaId,anio)),{docenteId,grado,grupo:grupo||"",asignaturaId,anio});
+    });
+    [...seleccionOriginal].filter(k=>!seleccionActual.has(k)).forEach(clave=>{
+      const [grado,grupo,asignaturaId]=clave.split('|');
+      batch.delete(db.collection(CARGA_ACADEMICA_COLLECTION).doc(idCargaAcademica(docenteId,grado,grupo,asignaturaId,anio)));
+    });
+    await batch.commit();
+  }
+};
 const VIVIENDA_TIPO_OPTS=[{value:"01",label:"01 - Casa"},{value:"02",label:"02 - Apartamento"},{value:"03",label:"03 - Cuartos"},{value:"04",label:"04 - Otros"}];
 const VIVIENDA_PROP_OPTS=[{value:"01",label:"01 - Propia"},{value:"02",label:"02 - Propia con crédito"},{value:"03",label:"03 - Arriendo"},{value:"04",label:"04 - Usufructo"}];
 const DISCRIM_OPTS=[{value:"01",label:"01 - Discapacidad"},{value:"02",label:"02 - Ritmo de aprendizaje"},{value:"03",label:"03 - Apariencia física"},{value:"04",label:"04 - Religión"},{value:"05",label:"05 - Pertenencia étnica"},{value:"06",label:"06 - Características familiares"},{value:"07",label:"07 - Otras"}];
@@ -2560,6 +2605,262 @@ function DirectivaPanel({onClose}){
   );
 }
 
+// ═══════════════════════════════════════════
+// MÓDULO DOCENTES (menú principal, separado de Gestión de Usuarios)
+// Registro de docentes, Docentes por asignatura, Docente por grupo y Carga
+// académica ya funcionan (Fase 1). Las 5 pestañas restantes (Juicios valorativos,
+// Proceso por escala/dimensión valorativa, y las 2 de Énfasis/Disciplina) quedan
+// como "próximamente" para que el menú ya esté completo mientras se construyen.
+// ═══════════════════════════════════════════
+
+// Pestaña "Carga académica": buscar un docente, marcar sus asignaturas por grado/grupo
+// (con 🔒 si ese cupo ya lo tiene otro docente) y guardar todo en un solo lote.
+function CargaAcademicaTab(){
+  const anioActual=String(new Date().getFullYear());
+  const [docentes,setDocentes]=useState([]);
+  const [grados,setGrados]=useState([]);
+  const [asigGrado,setAsigGrado]=useState([]);
+  const [asignaturas,setAsignaturas]=useState([]);
+  const [cargaTodos,setCargaTodos]=useState([]);
+  const [loading,setLoading]=useState(true);
+  const [docenteId,setDocenteId]=useState("");
+  const [buscarDocente,setBuscarDocente]=useState("");
+  const [anio,setAnio]=useState(anioActual);
+  const [seleccion,setSeleccion]=useState(new Set());
+  const [seleccionOriginal,setSeleccionOriginal]=useState(new Set());
+  const [nivelAbierto,setNivelAbierto]=useState("");
+  const [guardando,setGuardando]=useState(false);
+  const [msg,setMsg]=useState(""); const [msgErr,setMsgErr]=useState(false);
+
+  useEffect(()=>{ const unsub=docentesPersonalStorage.subscribe(list=>{setDocentes(list);setLoading(false);},()=>setLoading(false)); return ()=>unsub(); },[]);
+  useEffect(()=>{ const unsub=gradosStorage.subscribe(setGrados,()=>{}); return ()=>unsub(); },[]);
+  useEffect(()=>{ const unsub=asignaturasGradoStorage.subscribe(setAsigGrado,()=>{}); return ()=>unsub(); },[]);
+  useEffect(()=>{ const unsub=asignaturasStorage.subscribe(setAsignaturas,()=>{}); return ()=>unsub(); },[]);
+  useEffect(()=>{ const unsub=cargaAcademicaStorage.subscribe(setCargaTodos,()=>{}); return ()=>unsub(); },[]);
+
+  // Al cambiar de docente o de año, recarga la selección propia desde lo ya guardado.
+  useEffect(()=>{
+    if(!docenteId){ setSeleccion(new Set()); setSeleccionOriginal(new Set()); return; }
+    const propias=new Set(cargaTodos.filter(c=>c.docenteId===docenteId&&String(c.anio)===String(anio)).map(c=>`${c.grado}|${c.grupo||""}|${c.asignaturaId}`));
+    setSeleccion(propias); setSeleccionOriginal(propias);
+    // eslint-disable-next-line
+  },[docenteId,anio]);
+
+  const normBusqueda=s=>String(s||"").normalize("NFD").replace(/[\u0300-\u036f]/g,"").trim().toLowerCase();
+  const docentesFiltrados=(()=>{
+    const q=normBusqueda(buscarDocente);
+    const base=q?docentes.filter(d=>normBusqueda(d.nombres).includes(q)||normBusqueda(d.cedula).includes(q)):docentes;
+    return [...base].sort((a,b)=>(a.nombres||"").localeCompare(b.nombres||""));
+  })();
+  const docenteActual=docentes.find(d=>(d._id||d.cedula)===docenteId);
+
+  const cursosDisponibles=[...new Map(grados.map(g=>[`${g.gradoBase}|${g.grupo||""}`,{grado:g.gradoBase,grupo:g.grupo||""}])).values()]
+    .sort((a,b)=>(a.grado+a.grupo).localeCompare(b.grado+b.grupo));
+  const cursosPorNivel={};
+  cursosDisponibles.forEach(c=>{ const niv=nivelEducativo(c.grado); (cursosPorNivel[niv]=cursosPorNivel[niv]||[]).push(c); });
+  const ordenNiveles=["Preescolar","Primaria","Secundaria","Media Académica","Jóvenes y Adultos (Decreto 3011)"];
+
+  function asignaturasDeGrado(grado){
+    return asigGrado.filter(ag=>ag.grado===grado).map(ag=>{
+      const a=asignaturas.find(x=>x._id===ag.asignaturaId);
+      return {asignaturaId:ag.asignaturaId, nombre:a?.nombre||"(asignatura eliminada)"};
+    });
+  }
+  // Si ese cupo (grado+grupo+asignatura+año) ya lo tiene OTRO docente, devuelve su nombre.
+  function ocupadoPorOtro(clave){
+    const item=cargaTodos.find(c=>String(c.anio)===String(anio)&&c.docenteId!==docenteId&&`${c.grado}|${c.grupo||""}|${c.asignaturaId}`===clave);
+    if(!item) return null;
+    const d=docentes.find(x=>(x._id||x.cedula)===item.docenteId);
+    return d?.nombres||"otro docente";
+  }
+  function toggle(clave){
+    if(ocupadoPorOtro(clave)) return;
+    setSeleccion(prev=>{ const n=new Set(prev); n.has(clave)?n.delete(clave):n.add(clave); return n; });
+  }
+  const hayCambios=seleccion.size!==seleccionOriginal.size||[...seleccion].some(c=>!seleccionOriginal.has(c));
+
+  async function guardarTodo(){
+    if(!docenteId){ setMsg("Selecciona un docente primero."); setMsgErr(true); setTimeout(()=>setMsg(""),3500); return; }
+    setGuardando(true);
+    try{
+      await cargaAcademicaStorage.guardarLote(docenteId,anio,seleccion,seleccionOriginal);
+      setSeleccionOriginal(new Set(seleccion));
+      setMsg(`Carga académica guardada: ${seleccion.size} asignatura(s).`); setMsgErr(false);
+    }catch(e){ console.error(e); setMsg("No se pudo guardar: "+e.message); setMsgErr(true); }
+    setGuardando(false);
+    setTimeout(()=>setMsg(""),4000);
+  }
+
+  const ic="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400";
+
+  return h('div',{className:"space-y-4"},
+    h('p',{className:"text-xs text-slate-500"},"Busca un docente, marca las asignaturas que dicta en cada grado/grupo (🔒 = ya asignado a otro docente) y guarda todo junto al final. Un mismo docente puede tener varias asignaturas en varios grados."),
+    h('div',{className:"grid grid-cols-1 md:grid-cols-3 gap-2"},
+      h('div',{className:"md:col-span-2"},
+        h('input',{placeholder:"Buscar docente por nombre o cédula...",value:buscarDocente,onChange:e=>setBuscarDocente(e.target.value),className:ic}),
+        buscarDocente&&!docenteId&&h('div',{className:"border border-slate-200 rounded-lg mt-1 max-h-40 overflow-y-auto bg-white shadow-sm"},
+          docentesFiltrados.length===0?h('p',{className:"text-xs text-slate-400 px-3 py-2"},"Sin resultados."):
+          docentesFiltrados.slice(0,30).map(d=>h('button',{key:d._id||d.cedula,onClick:()=>{setDocenteId(d._id||d.cedula);setBuscarDocente("");},className:"w-full text-left px-3 py-1.5 text-sm hover:bg-indigo-50"},d.nombres,h('span',{className:"text-xs text-slate-400"}," — ",d.cedula)))
+        )
+      ),
+      h('input',{type:"number",value:anio,onChange:e=>setAnio(e.target.value),className:ic,placeholder:"Año"})
+    ),
+    docenteActual&&h('div',{className:"flex items-center justify-between bg-indigo-50 border border-indigo-200 rounded-lg px-3 py-2"},
+      h('p',{className:"text-sm text-indigo-800"},h('strong',null,docenteActual.nombres)," — ",docenteActual.cedula," · ",seleccion.size," asignatura(s) marcada(s)"),
+      h('button',{onClick:()=>setDocenteId(""),className:"text-xs text-indigo-600 underline"},"Cambiar docente")
+    ),
+    msg&&h('div',{className:`text-sm px-3 py-2 rounded-lg ${msgErr?"bg-rose-50 text-rose-600":"bg-emerald-50 text-emerald-700"}`},msg),
+    !docenteId?h('p',{className:"text-sm text-slate-400 text-center py-8"},"Selecciona un docente arriba para empezar."):
+    loading?h('p',{className:"text-sm text-slate-400 text-center py-8"},"Cargando..."):
+    !cursosDisponibles.length?h('p',{className:"text-sm text-amber-600"},"Primero crea los grados/grupos en Grados y Tutores."):
+    h('div',{className:"space-y-2 max-h-[50vh] overflow-y-auto pr-1"},
+      ordenNiveles.filter(niv=>cursosPorNivel[niv]?.length).map(niv=>h('div',{key:niv,className:"border border-slate-200 rounded-lg"},
+        h('button',{onClick:()=>setNivelAbierto(nivelAbierto===niv?"":niv),className:"w-full flex items-center justify-between px-3 py-2 bg-slate-50 text-sm font-semibold text-slate-700 rounded-t-lg"},
+          niv,h('span',{className:"text-xs text-slate-400"},nivelAbierto===niv?"▲":"▼")
+        ),
+        nivelAbierto===niv&&h('div',{className:"p-2 space-y-2"},
+          cursosPorNivel[niv].map(c=>{
+            const clave2=`${c.grado}|${c.grupo}`;
+            const etiqueta=(GRADO_OPTS.find(g=>g.value===c.grado)?.label?.split(" - ")[1]||c.grado)+(c.grupo?" - "+c.grupo:"");
+            const asigs=asignaturasDeGrado(c.grado);
+            if(!asigs.length) return h('div',{key:clave2,className:"text-xs text-slate-400 px-2"},etiqueta," — (sin asignaturas configuradas en Directiva)");
+            return h('div',{key:clave2,className:"border border-slate-100 rounded-lg p-2"},
+              h('p',{className:"text-xs font-semibold text-slate-700 mb-1"},etiqueta),
+              h('div',{className:"flex flex-wrap gap-1.5"},
+                asigs.map(a=>{
+                  const clave3=`${clave2}|${a.asignaturaId}`;
+                  const activo=seleccion.has(clave3);
+                  const ocupado=ocupadoPorOtro(clave3);
+                  return h('button',{key:a.asignaturaId,onClick:()=>toggle(clave3),title:ocupado?`Ya asignado a ${ocupado}`:"",
+                    className:`px-2 py-0.5 rounded-full text-[11px] font-medium border flex items-center gap-1 ${ocupado?"bg-slate-100 text-slate-400 border-slate-200 cursor-not-allowed":activo?"bg-indigo-600 text-white border-indigo-600":"bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100"}`
+                  },ocupado&&"🔒",a.nombre);
+                })
+              )
+            );
+          })
+        )
+      ))
+    ),
+    docenteId&&h('div',{className:"flex justify-end gap-2 pt-2 border-t border-slate-100"},
+      h('button',{disabled:!hayCambios||guardando,onClick:guardarTodo,className:"px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-700 disabled:opacity-50"},guardando?"Guardando...":`Guardar asignaciones${hayCambios?" (cambios sin guardar)":""}`)
+    )
+  );
+}
+
+// Pestaña "Docentes por asignatura": elige una asignatura y ve qué docentes la dictan y en qué grados.
+function DocentesPorAsignaturaTab(){
+  const [asignaturas,setAsignaturas]=useState([]);
+  const [docentes,setDocentes]=useState([]);
+  const [cargaTodos,setCargaTodos]=useState([]);
+  const [asignaturaId,setAsignaturaId]=useState("");
+  useEffect(()=>{ const unsub=asignaturasStorage.subscribe(setAsignaturas,()=>{}); return ()=>unsub(); },[]);
+  useEffect(()=>{ const unsub=docentesPersonalStorage.subscribe(setDocentes,()=>{}); return ()=>unsub(); },[]);
+  useEffect(()=>{ const unsub=cargaAcademicaStorage.subscribe(setCargaTodos,()=>{}); return ()=>unsub(); },[]);
+  const ic="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400";
+  const filas=cargaTodos.filter(c=>c.asignaturaId===asignaturaId).map(c=>{
+    const d=docentes.find(x=>(x._id||x.cedula)===c.docenteId);
+    const etiqueta=(GRADO_OPTS.find(g=>g.value===c.grado)?.label?.split(" - ")[1]||c.grado)+(c.grupo?" - "+c.grupo:"");
+    return {docente:d?.nombres||c.docenteId, curso:etiqueta, anio:c.anio};
+  }).sort((a,b)=>a.docente.localeCompare(b.docente));
+  return h('div',{className:"space-y-3"},
+    h('select',{value:asignaturaId,onChange:e=>setAsignaturaId(e.target.value),className:ic},
+      h('option',{value:""},"— Selecciona una asignatura —"),
+      [...asignaturas].sort((a,b)=>(a.nombre||"").localeCompare(b.nombre||"")).map(a=>h('option',{key:a._id,value:a._id},a.nombre))
+    ),
+    !asignaturaId?h('p',{className:"text-sm text-slate-400 text-center py-6"},"Selecciona una asignatura para ver qué docentes la dictan."):
+    !filas.length?h('p',{className:"text-sm text-slate-400 text-center py-6"},"Nadie tiene esta asignatura asignada todavía (usa la pestaña Carga académica)."):
+    h('table',{className:"w-full text-sm border border-slate-200 rounded-lg overflow-hidden"},
+      h('thead',{className:"bg-slate-50 text-slate-500 text-xs uppercase"},h('tr',null,h('th',{className:"text-left px-3 py-2"},"Docente"),h('th',{className:"text-left px-3 py-2"},"Grado/Grupo"),h('th',{className:"text-left px-3 py-2"},"Año"))),
+      h('tbody',null,filas.map((f,i)=>h('tr',{key:i,className:"border-t border-slate-100"},h('td',{className:"px-3 py-2"},f.docente),h('td',{className:"px-3 py-2"},f.curso),h('td',{className:"px-3 py-2"},f.anio))))
+    )
+  );
+}
+
+// Pestaña "Docente por grupo": elige grado/grupo y ve qué docentes/asignaturas tiene ese curso.
+function DocentePorGrupoTab(){
+  const [grados,setGrados]=useState([]);
+  const [docentes,setDocentes]=useState([]);
+  const [asignaturas,setAsignaturas]=useState([]);
+  const [cargaTodos,setCargaTodos]=useState([]);
+  const [claveCurso,setClaveCurso]=useState("");
+  useEffect(()=>{ const unsub=gradosStorage.subscribe(setGrados,()=>{}); return ()=>unsub(); },[]);
+  useEffect(()=>{ const unsub=docentesPersonalStorage.subscribe(setDocentes,()=>{}); return ()=>unsub(); },[]);
+  useEffect(()=>{ const unsub=asignaturasStorage.subscribe(setAsignaturas,()=>{}); return ()=>unsub(); },[]);
+  useEffect(()=>{ const unsub=cargaAcademicaStorage.subscribe(setCargaTodos,()=>{}); return ()=>unsub(); },[]);
+  const ic="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400";
+  const cursosDisponibles=[...new Map(grados.map(g=>[`${g.gradoBase}|${g.grupo||""}`,{grado:g.gradoBase,grupo:g.grupo||""}])).values()]
+    .sort((a,b)=>(a.grado+a.grupo).localeCompare(b.grado+b.grupo));
+  const [gradoSel,grupoSel]=claveCurso.split("|");
+  const filas=cargaTodos.filter(c=>c.grado===gradoSel&&(c.grupo||"")===(grupoSel||"")).map(c=>{
+    const d=docentes.find(x=>(x._id||x.cedula)===c.docenteId);
+    const a=asignaturas.find(x=>x._id===c.asignaturaId);
+    return {docente:d?.nombres||c.docenteId, asignatura:a?.nombre||"(asignatura eliminada)", anio:c.anio};
+  }).sort((a,b)=>a.asignatura.localeCompare(b.asignatura));
+  return h('div',{className:"space-y-3"},
+    h('select',{value:claveCurso,onChange:e=>setClaveCurso(e.target.value),className:ic},
+      h('option',{value:""},"— Selecciona grado/grupo —"),
+      cursosDisponibles.map(c=>{
+        const etiqueta=(GRADO_OPTS.find(g=>g.value===c.grado)?.label?.split(" - ")[1]||c.grado)+(c.grupo?" - "+c.grupo:"");
+        return h('option',{key:`${c.grado}|${c.grupo}`,value:`${c.grado}|${c.grupo}`},etiqueta);
+      })
+    ),
+    !claveCurso?h('p',{className:"text-sm text-slate-400 text-center py-6"},"Selecciona un grado/grupo para ver sus docentes."):
+    !filas.length?h('p',{className:"text-sm text-slate-400 text-center py-6"},"Este grado/grupo todavía no tiene docentes asignados (usa la pestaña Carga académica)."):
+    h('table',{className:"w-full text-sm border border-slate-200 rounded-lg overflow-hidden"},
+      h('thead',{className:"bg-slate-50 text-slate-500 text-xs uppercase"},h('tr',null,h('th',{className:"text-left px-3 py-2"},"Asignatura"),h('th',{className:"text-left px-3 py-2"},"Docente"),h('th',{className:"text-left px-3 py-2"},"Año"))),
+      h('tbody',null,filas.map((f,i)=>h('tr',{key:i,className:"border-t border-slate-100"},h('td',{className:"px-3 py-2"},f.asignatura),h('td',{className:"px-3 py-2"},f.docente),h('td',{className:"px-3 py-2"},f.anio))))
+    )
+  );
+}
+
+function DocentesProximamenteTab({texto}){
+  return h('div',{className:"text-center py-12"},
+    h('p',{className:"text-3xl mb-2"},"🚧"),
+    h('p',{className:"text-sm text-slate-500 max-w-md mx-auto"},texto||"Esta pestaña está en construcción y llegará en una próxima actualización.")
+  );
+}
+
+function DocentesPanel({onClose}){
+  const [tab,setTab]=useState("registro");
+  const TABS=[
+    {id:"registro",label:"Registro de docentes"},
+    {id:"porAsignatura",label:"Docentes por asignatura"},
+    {id:"juicios",label:"Juicios valorativos"},
+    {id:"procesoEscala",label:"Proceso por escala valorativa"},
+    {id:"procesoDimension",label:"Proceso por dimensión valorativa"},
+    {id:"porGrupo",label:"Docente por grupo"},
+    {id:"carga",label:"Carga académica"},
+    {id:"bdEnfasis",label:"BD Juicios Énfasis/Disciplinas"},
+    {id:"procesoEnfasis",label:"Proceso Escala Énfasis/Disciplina"}
+  ];
+  return h('div',{className:"fixed inset-0 bg-black/40 z-50 flex items-center justify-center px-4 py-6 overflow-y-auto"},
+    h('div',{className:"bg-white rounded-2xl shadow-xl w-full max-w-[96vw] xl:max-w-5xl p-6 my-auto max-h-[92vh] flex flex-col"},
+      h('div',{className:"flex items-center justify-between mb-4"},
+        h('h2',{className:"text-base font-semibold text-slate-800 flex items-center gap-2"},"👨‍🏫 Docentes"),
+        h('button',{onClick:onClose,className:"text-slate-400 hover:text-slate-600"},h(Icons.X))
+      ),
+      h('div',{className:"flex flex-wrap gap-1 mb-4 border-b border-slate-200 pb-2"},
+        TABS.map(t=>h('button',{key:t.id,onClick:()=>setTab(t.id),className:`px-3 py-1.5 rounded-lg text-xs font-medium ${tab===t.id?"bg-indigo-600 text-white":"text-slate-600 hover:bg-slate-50"}`},t.label))
+      ),
+      h('div',{className:"overflow-y-auto flex-1"},
+        tab==="registro"&&h(SeccionCrudSimple,{
+          storage:docentesPersonalStorage, itemLabel:"docente", tituloImpresion:"Registro de Docentes",
+          ayuda:"Registro de docentes y directivos docentes (independiente de si ya tienen cuenta/login en el sistema).",
+          campos:PERSONAL_FIELD_DEFS
+        }),
+        tab==="porAsignatura"&&h(DocentesPorAsignaturaTab),
+        tab==="juicios"&&h(DocentesProximamenteTab,{texto:"Juicios valorativos: en preescolar por Propósitos/Indicadores, en primaria en adelante por Escala Valorativa."}),
+        tab==="procesoEscala"&&h(DocentesProximamenteTab,{texto:"Proceso académico por escala valorativa (Primaria, Secundaria y Media)."}),
+        tab==="procesoDimension"&&h(DocentesProximamenteTab,{texto:"Proceso académico por dimensión valorativa (Preescolar: propósitos e indicadores según la norma)."}),
+        tab==="porGrupo"&&h(DocentePorGrupoTab),
+        tab==="carga"&&h(CargaAcademicaTab),
+        tab==="bdEnfasis"&&h(DocentesProximamenteTab),
+        tab==="procesoEnfasis"&&h(DocentesProximamenteTab)
+      )
+    )
+  );
+}
+
 // Modal para importar la Carga Académica directo desde el Excel exportado de SIAN
 // ("Docentes por Grupo → Exportar a Excel"). Crea/actualiza Áreas, Asignaturas,
 // Asignaturas por Grado, y asigna la carga a cada docente que ya tenga cuenta.
@@ -3398,6 +3699,7 @@ function App(){
   const [showSettings,setShowSettings]=useState(false);
   const [showGrados,setShowGrados]=useState(false);
   const [showDirectiva,setShowDirectiva]=useState(false);
+  const [showDocentes,setShowDocentes]=useState(false);
   const [showImportCarga,setShowImportCarga]=useState(false);
   const [showAuditoria,setShowAuditoria]=useState(false);
   const [showCompletitud,setShowCompletitud]=useState(false);
@@ -3752,6 +4054,7 @@ function App(){
             canManageUsers&&h('button',{onClick:()=>{setShowSettings(true);setShowToolsMenu(false);},className:"w-full text-left px-4 py-2 text-sm hover:bg-slate-50 flex items-center gap-2"},"⚙️ Gestión de Usuarios"),
             isAdmin&&h('button',{onClick:()=>{setShowGrados(true);setShowToolsMenu(false);},className:"w-full text-left px-4 py-2 text-sm hover:bg-slate-50 flex items-center gap-2"},"🎓 Grados y Tutores"),
             (isAdmin||role==="rector")&&h('button',{onClick:()=>{setShowDirectiva(true);setShowToolsMenu(false);},className:"w-full text-left px-4 py-2 text-sm hover:bg-slate-50 flex items-center gap-2"},"🏛️ Directiva"),
+            (isAdmin||role==="rector")&&h('button',{onClick:()=>{setShowDocentes(true);setShowToolsMenu(false);},className:"w-full text-left px-4 py-2 text-sm hover:bg-slate-50 flex items-center gap-2"},"👨‍🏫 Docentes"),
             isAdmin&&h('button',{onClick:()=>{setShowImportCarga(true);setShowToolsMenu(false);},className:"w-full text-left px-4 py-2 text-sm hover:bg-slate-50 flex items-center gap-2"},"📥 Importar Carga Académica (SIAN)"),
             isAdmin&&h('button',{onClick:()=>{setShowAuditoria(true);setShowToolsMenu(false);},className:"w-full text-left px-4 py-2 text-sm hover:bg-slate-50 flex items-center gap-2"},"🕒 Auditoría"),
             isAdmin&&h('button',{onClick:()=>{setShowCompletitud(true);setShowToolsMenu(false);},className:"w-full text-left px-4 py-2 text-sm hover:bg-slate-50 flex items-center gap-2"},"📊 Completitud de Datos"),
@@ -3769,6 +4072,7 @@ function App(){
     showSettings&&h(UserSettings,{onClose:()=>setShowSettings(false),currentUid:session.uid,usuario:session.nombre||session.email,rolActual:role}),
     showGrados&&h(GradosTutoresPanel,{onClose:()=>setShowGrados(false),usuario:session.nombre||session.email,rolActual:role}),
     showDirectiva&&h(DirectivaPanel,{onClose:()=>setShowDirectiva(false)}),
+    showDocentes&&h(DocentesPanel,{onClose:()=>setShowDocentes(false)}),
     showImportCarga&&h(ImportarCargaAcademicaModal,{onClose:()=>setShowImportCarga(false)}),
     showAuditoria&&h(AuditoriaPanel,{onClose:()=>setShowAuditoria(false)}),
     showCompletitud&&h(CompletitudPanel,{students,onClose:()=>setShowCompletitud(false)}),
