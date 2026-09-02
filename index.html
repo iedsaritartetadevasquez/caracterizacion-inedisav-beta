@@ -644,7 +644,7 @@ const Icons = {
 // ═══════════════════════════════════════════
 // Marca de versión visible en el encabezado (junto al botón "Salir") y en la consola del
 // navegador, para verificar rápidamente si el archivo desplegado es el más reciente.
-const APP_VERSION = "2026-08-10-modulo-docentes-v42";
+const APP_VERSION = "2026-08-10-agregar-personal-v43";
 console.log("INEDISAV Caracterización — versión cargada:", APP_VERSION);
 const ROLE_LABELS = {admin:"Admin",rector:"Rector",coordinador:"Coordinador",orientacion:"Orientación Escolar",docente:"Docente",auxiliar:"Auxiliar",estudiante:"Estudiante"};
 const ROLE_BADGE  = {admin:"bg-indigo-300 text-indigo-900",rector:"bg-purple-300 text-purple-900",coordinador:"bg-amber-300 text-amber-900",orientacion:"bg-teal-300 text-teal-900",docente:"bg-emerald-300 text-emerald-900",auxiliar:"bg-sky-300 text-sky-900",estudiante:"bg-rose-200 text-rose-900"};
@@ -1833,6 +1833,7 @@ function PersonalPanel({onClose,usuario,rol}){
         h('select',{value:filtroTipo,onChange:e=>setFiltroTipo(e.target.value),className:"border border-slate-200 rounded-lg px-3 py-2 text-sm"},h('option',{value:""},"Todos los tipos"),TIPO_PERSONAL_OPTS.map(o=>h('option',{key:o.value,value:o.value},o.label))),
         h('select',{value:filtroArea,onChange:e=>setFiltroArea(e.target.value),className:"border border-slate-200 rounded-lg px-3 py-2 text-sm"},h('option',{value:""},"Todas las áreas"),AREA_EDUCATIVA_OPTS.filter(o=>o.value).map(o=>h('option',{key:o.value,value:o.value},o.label))),
         anosDisponibles.length>1&&h('select',{value:filtroAno,onChange:e=>setFiltroAno(e.target.value),className:"border border-slate-200 rounded-lg px-3 py-2 text-sm"},h('option',{value:""},"Todos los años"),anosDisponibles.map(a=>h('option',{key:a,value:a},a))),
+        h('button',{onClick:()=>setEditando(emptyPersonal()),className:"px-3 py-2 bg-slate-800 text-white rounded-lg text-sm hover:bg-slate-900 flex items-center gap-1"},"+ Agregar Personal"),
         h('button',{onClick:hExportarPersonal,className:"px-3 py-2 border border-indigo-200 text-indigo-700 rounded-lg text-sm hover:bg-indigo-50 flex items-center gap-1"},h(Icons.Download),"Exportar"),
         h('button',{disabled:importing,onClick:()=>fileRef.current?.click(),className:"px-3 py-2 bg-emerald-600 text-white rounded-lg text-sm hover:bg-emerald-700 disabled:opacity-60"},importing?"Importando...":"📥 Importar Excel"),
         rol==="admin"&&h('button',{disabled:importing,onClick:hCrearUsuariosPersonal,className:"px-3 py-2 bg-indigo-600 text-white rounded-lg text-sm hover:bg-indigo-700 disabled:opacity-60"},"🔑 Crear Usuarios de Personal"),
@@ -1841,11 +1842,11 @@ function PersonalPanel({onClose,usuario,rol}){
       msg&&h('div',{className:`text-sm px-3 py-2 rounded-lg mb-3 ${msgErr?"bg-rose-50 text-rose-600":"bg-emerald-50 text-emerald-700"}`},msg),
       editando&&h('div',{className:"bg-slate-50 border border-slate-200 rounded-xl p-4 mb-4"},
         h('div',{className:"flex items-center justify-between mb-3"},
-          h('p',{className:"text-xs font-semibold text-slate-500 uppercase"},"Editando registro"),
+          h('p',{className:"text-xs font-semibold text-slate-500 uppercase"},personas.some(p=>p.cedula===editando.cedula)?"Editando registro":"Nuevo registro"),
           h('button',{onClick:()=>setEditando(null),className:"text-xs text-slate-400 hover:text-slate-600"},"Cancelar")
         ),
         h(PersonalFormFields,{data:editando,onChange}),
-        h('button',{onClick:guardarEdicion,className:"mt-3 px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm hover:bg-indigo-700"},"Guardar cambios")
+        h('button',{onClick:guardarEdicion,className:"mt-3 px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm hover:bg-indigo-700"},"Guardar")
       ),
       h('div',{className:"overflow-y-auto flex-1 border border-slate-200 rounded-lg"},
         loadingList?h('p',{className:"text-sm text-slate-400 text-center py-8"},"Cargando..."):
