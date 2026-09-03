@@ -644,7 +644,7 @@ const Icons = {
 // ═══════════════════════════════════════════
 // Marca de versión visible en el encabezado (junto al botón "Salir") y en la consola del
 // navegador, para verificar rápidamente si el archivo desplegado es el más reciente.
-const APP_VERSION = "2026-08-10-docentes-por-asignatura-tarjetas-v44";
+const APP_VERSION = "2026-08-10-banco-juicios-sian-v45";
 console.log("INEDISAV Caracterización — versión cargada:", APP_VERSION);
 const ROLE_LABELS = {admin:"Admin",rector:"Rector",coordinador:"Coordinador",orientacion:"Orientación Escolar",docente:"Docente",auxiliar:"Auxiliar",estudiante:"Estudiante"};
 const ROLE_BADGE  = {admin:"bg-indigo-300 text-indigo-900",rector:"bg-purple-300 text-purple-900",coordinador:"bg-amber-300 text-amber-900",orientacion:"bg-teal-300 text-teal-900",docente:"bg-emerald-300 text-emerald-900",auxiliar:"bg-sky-300 text-sky-900",estudiante:"bg-rose-200 text-rose-900"};
@@ -2781,6 +2781,168 @@ ${lfHtml()}</body></html>`;
   );
 }
 
+// Pestaña "Base de Datos Juicios Valorativos": los logros propios de cada docente,
+// filtrados por Docente + Grado + Asignatura + Período (igual que en SIAN). Cada
+// docente arma su propio catálogo de logros, con categoría (Saber/Saber Hacer/Ser) y estado On/Off.
+function BancoJuiciosSeccion(){
+  const [docentes,setDocentes]=useState([]);
+  const [asignaturas,setAsignaturas]=useState([]);
+  const [categorias,setCategorias]=useState([]);
+  const [logros,setLogros]=useState([]);
+  const [loading,setLoading]=useState(true);
+  const [filtroDocente,setFiltroDocente]=useState("");
+  const [filtroPeriodo,setFiltroPeriodo]=useState("");
+  const [filtroGrado,setFiltroGrado]=useState("");
+  const [filtroAsignatura,setFiltroAsignatura]=useState("");
+  const [filtroCategoria,setFiltroCategoria]=useState("");
+  const [nuevoTexto,setNuevoTexto]=useState("");
+  const [nuevaCategoria,setNuevaCategoria]=useState("");
+  const [editId,setEditId]=useState(null);
+  const [editTexto,setEditTexto]=useState("");
+  const [editCategoria,setEditCategoria]=useState("");
+  const [msg,setMsg]=useState(""); const [msgErr,setMsgErr]=useState(false);
+  const [duplicarPeriodo,setDuplicarPeriodo]=useState("");
+
+  useEffect(()=>{ const unsub=usersStorage.subscribe(list=>setDocentes(list.filter(u=>u.role==="docente")),()=>{}); return ()=>unsub(); },[]);
+  useEffect(()=>{ const unsub=asignaturasStorage.subscribe(setAsignaturas,()=>{}); return ()=>unsub(); },[]);
+  useEffect(()=>{ const unsub=categoriasJuicioStorage.subscribe(setCategorias,()=>{}); return ()=>unsub(); },[]);
+  useEffect(()=>{ const unsub=bancoJuiciosStorage.subscribe(list=>{setLogros(list);setLoading(false);},()=>setLoading(false)); return ()=>unsub(); },[]);
+
+  function say(t,err=false){setMsg(t);setMsgErr(err);setTimeout(()=>setMsg(""),3500);}
+  const etiquetaGrado=g=>(GRADO_OPTS.find(x=>x.value===g)?.label?.split(" - ")[1]||g);
+  const PERIODOS_FIJOS=[{value:"1",label:"Período 1"},{value:"2",label:"Período 2"},{value:"3",label:"Período 3"}];
+
+  const docenteObj=docentes.find(d=>d.uid===filtroDocente);
+  const gradosDelDocente=docenteObj?[...new Set((docenteObj.cargaAcademica||[]).map(c=>c.split("|")[0]))]:GRADO_OPTS.map(g=>g.value);
+  const asignaturasDelDocente=docenteObj
+    ?[...new Set((docenteObj.cargaAcademica||[]).filter(c=>!filtroGrado||c.startsWith(filtroGrado+"|")).map(c=>c.split("|")[2]))].map(id=>asignaturas.find(a=>a._id===id)).filter(Boolean)
+    :asignaturas;
+
+  const resultados=logros.filter(l=>
+    (!filtroDocente||l.docenteUid===filtroDocente)
+    &&(!filtroPeriodo||l.periodo===filtroPeriodo)
+    &&(!filtroGrado||l.grado===filtroGrado)
+    &&(!filtroAsignatura||l.asignaturaId===filtroAsignatura)
+    &&(!filtroCategoria||l.categoriaId===filtroCategoria)
+  );
+  const listoParaAgregar=filtroDocente&&filtroGrado&&filtroAsignatura&&filtroPeriodo;
+
+  async function agregar(){
+    if(!listoParaAgregar){ say("Selecciona Docente, Grado, Asignatura y Período arriba primero.",true); return; }
+    if(!nuevoTexto.trim()){ say("Escribe el texto del juicio valorativo.",true); return; }
+    try{
+      await bancoJuiciosStorage.saveOne({docenteUid:filtroDocente,grado:filtroGrado,asignaturaId:filtroAsignatura,periodo:filtroPeriodo,texto:nuevoTexto.trim(),categoriaId:nuevaCategoria,estado:"on"});
+      setNuevoTexto(""); setNuevaCategoria(""); say("Juicio valorativo agregado.");
+    }catch(e){ console.error(e); say("No se pudo guardar: "+e.message,true); }
+  }
+  function empezarEdicion(l){ setEditId(l._id); setEditTexto(l.texto||""); setEditCategoria(l.categoriaId||""); }
+  async function guardarEdicion(l){
+    try{ await bancoJuiciosStorage.saveOne({...l,texto:editTexto,categoriaId:editCategoria}); setEditId(null); say("Actualizado."); }
+    catch(e){ console.error(e); say("No se pudo guardar.",true); }
+  }
+  async function toggleEstado(l){
+    try{ await bancoJuiciosStorage.saveOne({...l,estado:l.estado==="off"?"on":"off"}); }
+    catch(e){ console.error(e); say("No se pudo cambiar el estado.",true); }
+  }
+  async function borrar(id){
+    if(!window.confirm("¿Eliminar este juicio valorativo?")) return;
+    try{ await bancoJuiciosStorage.deleteOne(id); say("Eliminado."); }
+    catch(e){ console.error(e); say("No se pudo eliminar.",true); }
+  }
+  async function duplicar(){
+    if(!resultados.length){ say("No hay juicios en este filtro para duplicar.",true); return; }
+    if(!duplicarPeriodo){ say("Elige a qué período duplicar.",true); return; }
+    if(!window.confirm(`Se van a duplicar ${resultados.length} juicio(s) al Período ${duplicarPeriodo}. ¿Continuar?`)) return;
+    try{
+      for(const l of resultados) await bancoJuiciosStorage.saveOne({docenteUid:l.docenteUid,grado:l.grado,asignaturaId:l.asignaturaId,periodo:duplicarPeriodo,texto:l.texto,categoriaId:l.categoriaId,estado:l.estado});
+      say(`${resultados.length} juicio(s) duplicado(s) al Período ${duplicarPeriodo}.`);
+    }catch(e){ console.error(e); say("No se pudo duplicar: "+e.message,true); }
+  }
+  async function duplicarMasivamente(){
+    if(!resultados.length){ say("No hay juicios en este filtro para duplicar.",true); return; }
+    const otros=PERIODOS_FIJOS.filter(p=>p.value!==filtroPeriodo);
+    if(!window.confirm(`Se van a duplicar ${resultados.length} juicio(s) a los otros ${otros.length} períodos. ¿Continuar?`)) return;
+    try{
+      for(const p of otros) for(const l of resultados) await bancoJuiciosStorage.saveOne({docenteUid:l.docenteUid,grado:l.grado,asignaturaId:l.asignaturaId,periodo:p.value,texto:l.texto,categoriaId:l.categoriaId,estado:l.estado});
+      say(`Duplicado a los ${otros.length} períodos restantes.`);
+    }catch(e){ console.error(e); say("No se pudo duplicar: "+e.message,true); }
+  }
+
+  function hExportar(){
+    const rows=resultados.map((l,i)=>({"COD LOGRO":i+1,"JUICIOS VALORATIVOS":l.texto,"CATEGORÍA":categorias.find(c=>c._id===l.categoriaId)?.nombre||"","ESTADO":l.estado==="off"?"Off":"On"}));
+    const ws=XLSX.utils.json_to_sheet(rows);
+    const wb=XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb,ws,"Juicios Valorativos");
+    XLSX.writeFile(wb,`juicios_valorativos_${new Date().toISOString().slice(0,10)}.xlsx`);
+  }
+  function hImprimir(){
+    const docenteNombre=docenteObj?.nombre||"";
+    const asigNombre=asignaturas.find(a=>a._id===filtroAsignatura)?.nombre||"";
+    const filasHtml=resultados.map((l,i)=>`<tr><td>${i+1}</td><td class="tn">${l.texto}</td><td>${categorias.find(c=>c._id===l.categoriaId)?.nombre||""}</td><td>${l.estado==="off"?"Off":"On"}</td></tr>`).join("");
+    const html=`<!DOCTYPE html><html lang="es"><head><meta charset="UTF-8"><title>Juicios Valorativos</title>
+<style>*{box-sizing:border-box}body{font-family:Arial,sans-serif;margin:18px;font-size:11px}@media print{button{display:none!important}}
+h1{background:#1F4E79;color:#fff;text-align:center;padding:8px;font-size:13px;font-weight:700;margin:0}.sub{background:#BDD7EE;color:#1F4E79;text-align:center;padding:6px;font-size:11px;font-weight:700;margin-bottom:10px}
+table{width:100%;border-collapse:collapse;font-size:11px}th,td{border:1px solid #555;padding:5px}th{background:#1F4E79;color:#fff;text-align:left}.tn{text-align:left!important}
+h1,.sub{-webkit-print-color-adjust:exact;print-color-adjust:exact}</style></head><body>
+<button onclick="window.print()" style="margin-bottom:14px;padding:7px 18px;background:#4f46e5;color:#fff;border:none;border-radius:7px;cursor:pointer;">🖨️ Imprimir / Guardar PDF</button>
+${lhHtml()}<h1>IED SARID ARTETA DE VÁSQUEZ — "INEDISAV CONSTRUYENDO CALIDAD"</h1>
+<div class="sub">JUICIOS VALORATIVOS — ${docenteNombre} — ${asigNombre}</div>
+<table><thead><tr><th>N°</th><th>Juicio Valorativo</th><th>Categoría</th><th>Estado</th></tr></thead><tbody>${filasHtml}</tbody></table>
+${lfHtml()}</body></html>`;
+    dlHtml(html,"juicios_valorativos.html");
+  }
+
+  const ic="border border-slate-200 rounded-lg px-3 py-2 text-sm";
+  return h('div',{className:"space-y-3"},
+    msg&&h('div',{className:`rounded-lg px-3 py-2 text-xs ${msgErr?"bg-rose-50 text-rose-700":"bg-emerald-50 text-emerald-700"}`},msg),
+    h('div',{className:"bg-slate-50 border border-slate-200 rounded-xl p-3"},
+      h('p',{className:"text-xs font-semibold text-slate-500 mb-2 uppercase"},"Filtros"),
+      h('div',{className:"grid grid-cols-2 md:grid-cols-4 gap-2"},
+        h('select',{value:filtroDocente,onChange:e=>{setFiltroDocente(e.target.value);setFiltroGrado("");setFiltroAsignatura("");},className:ic},h('option',{value:""},"— Docente —"),docentes.map(d=>h('option',{key:d.uid,value:d.uid},d.nombre))),
+        h('select',{value:filtroGrado,onChange:e=>{setFiltroGrado(e.target.value);setFiltroAsignatura("");},className:ic},h('option',{value:""},"— Grado —"),gradosDelDocente.map(g=>h('option',{key:g,value:g},etiquetaGrado(g)))),
+        h('select',{value:filtroAsignatura,onChange:e=>setFiltroAsignatura(e.target.value),className:ic},h('option',{value:""},"— Asignatura —"),asignaturasDelDocente.map(a=>h('option',{key:a._id,value:a._id},a.nombre))),
+        h('select',{value:filtroPeriodo,onChange:e=>setFiltroPeriodo(e.target.value),className:ic},h('option',{value:""},"— Período —"),PERIODOS_FIJOS.map(p=>h('option',{key:p.value,value:p.value},p.label)))
+      )
+    ),
+    h('div',{className:"flex flex-wrap items-center gap-2"},
+      h('select',{value:duplicarPeriodo,onChange:e=>setDuplicarPeriodo(e.target.value),className:ic},h('option',{value:""},"Duplicar a período..."),PERIODOS_FIJOS.filter(p=>p.value!==filtroPeriodo).map(p=>h('option',{key:p.value,value:p.value},p.label))),
+      h('button',{onClick:duplicar,className:"px-3 py-1.5 bg-sky-600 text-white rounded-lg text-xs font-medium hover:bg-sky-700"},"Duplicar Juicios Valorativos"),
+      h('button',{onClick:duplicarMasivamente,className:"px-3 py-1.5 bg-sky-800 text-white rounded-lg text-xs font-medium hover:bg-sky-900"},"Duplicar Masivamente"),
+      h('span',{className:"text-[11px] text-slate-400"},"(copia los juicios de este filtro a otro(s) período(s))")
+    ),
+    h('div',{className:"flex flex-wrap items-center gap-2"},
+      h('select',{value:filtroCategoria,onChange:e=>setFiltroCategoria(e.target.value),className:ic},h('option',{value:""},"Todas las categorías"),categorias.map(c=>h('option',{key:c._id,value:c._id},c.nombre))),
+      h('button',{onClick:hImprimir,className:"px-3 py-1.5 border border-slate-200 text-slate-700 rounded-lg text-xs font-medium hover:bg-slate-50"},"🖨️ Imprimir"),
+      h('button',{onClick:hExportar,className:"px-3 py-1.5 border border-indigo-200 text-indigo-700 rounded-lg text-xs font-medium hover:bg-indigo-50"},"⬇️ Exportar"),
+      h('span',{className:"text-xs text-slate-400"},`${resultados.length} logro(s)`)
+    ),
+    listoParaAgregar&&h('div',{className:"flex flex-wrap gap-2 items-start bg-white border border-indigo-200 rounded-lg p-2"},
+      h('textarea',{placeholder:"Texto del nuevo juicio valorativo...",rows:2,value:nuevoTexto,onChange:e=>setNuevoTexto(e.target.value),className:ic+" flex-1 min-w-[220px]"}),
+      h('select',{value:nuevaCategoria,onChange:e=>setNuevaCategoria(e.target.value),className:ic},h('option',{value:""},"— Categoría —"),categorias.map(c=>h('option',{key:c._id,value:c._id},c.nombre))),
+      h('button',{onClick:agregar,className:"px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm hover:bg-indigo-700"},"+ Nuevo Juicio Valorativo")
+    ),
+    !listoParaAgregar&&h('p',{className:"text-xs text-amber-600"},"Selecciona Docente, Grado, Asignatura y Período arriba para poder agregar nuevos juicios."),
+    loading?h('p',{className:"text-sm text-slate-400 text-center py-6"},"Cargando..."):
+    !resultados.length?h('p',{className:"text-sm text-slate-400 text-center py-6"},"No hay juicios valorativos con este filtro todavía."):
+    h('div',{className:"border border-slate-200 rounded-lg overflow-auto max-h-[45vh]"},
+      h('table',{className:"w-full text-sm"},
+        h('thead',{className:"bg-slate-50 text-slate-500 text-xs uppercase sticky top-0"},h('tr',null,h('th',{className:"text-left px-3 py-2"},"Cod"),h('th',{className:"text-left px-3 py-2"},"Juicios Valorativos"),h('th',{className:"text-left px-3 py-2"},"Categoría"),h('th',{className:"text-left px-3 py-2"},"Estado"),h('th',{className:"text-left px-3 py-2"},"Acciones"))),
+        h('tbody',null,resultados.map((l,i)=>h('tr',{key:l._id,className:"border-t border-slate-100"},
+          h('td',{className:"px-3 py-2 text-slate-400"},i+1),
+          h('td',{className:"px-3 py-2 max-w-md"}, editId===l._id?h('textarea',{rows:2,value:editTexto,onChange:e=>setEditTexto(e.target.value),className:ic+" w-full"}):l.texto),
+          h('td',{className:"px-3 py-2"}, editId===l._id?h('select',{value:editCategoria,onChange:e=>setEditCategoria(e.target.value),className:ic},h('option',{value:""},"—"),categorias.map(c=>h('option',{key:c._id,value:c._id},c.nombre))):(categorias.find(c=>c._id===l.categoriaId)?.nombre||"—")),
+          h('td',{className:"px-3 py-2"},h('button',{onClick:()=>toggleEstado(l),className:`px-2 py-0.5 rounded-full text-xs font-medium ${l.estado==="off"?"bg-slate-200 text-slate-500":"bg-emerald-100 text-emerald-700"}`},l.estado==="off"?"Off":"On")),
+          h('td',{className:"px-3 py-2"},h('div',{className:"flex gap-2"},
+            editId===l._id
+              ?h('button',{onClick:()=>guardarEdicion(l),className:"text-xs px-2 py-1 border border-emerald-200 text-emerald-700 rounded hover:bg-emerald-50"},"Guardar")
+              :h('button',{onClick:()=>empezarEdicion(l),className:"text-xs px-2 py-1 border border-slate-200 rounded hover:bg-slate-50"},"Editar"),
+            h('button',{onClick:()=>borrar(l._id),className:"text-xs px-2 py-1 border border-rose-200 text-rose-600 rounded hover:bg-rose-50"},"Eliminar")
+          ))
+        )))
+      )
+    )
+  );
+}
+
 function DocentesPanel({onClose,onIrPersonal}){
   const [tab,setTab]=useState("registro");
   const [escala,setEscala]=useState([]);
@@ -2817,15 +2979,7 @@ function DocentesPanel({onClose,onIrPersonal}){
           )
         ),
         tab==="porAsignatura"&&h(DocentesPorAsignaturaSeccion),
-        tab==="bancoJuicios"&&h(SeccionCrudSimple,{
-          storage:bancoJuiciosStorage, itemLabel:"frase", tituloImpresion:"Banco de Juicios Valorativos",
-          ayuda:"Catálogo de frases/observaciones ya redactadas que los docentes podrán reutilizar al calificar (ej. una frase típica para un desempeño Superior en Matemáticas). Se usará en el módulo de Evaluaciones.",
-          campos:[
-            {id:"texto",label:"Texto de la frase",type:"textarea"},
-            {id:"nivelId",label:"— Nivel de la escala —",type:"select",options:escalaOpts,requerido:false},
-            {id:"categoriaId",label:"— Categoría de juicio —",type:"select",options:categoriaOpts,requerido:false}
-          ]
-        }),
+        tab==="bancoJuicios"&&h(BancoJuiciosSeccion),
         tab==="procesosEscala"&&h('div',{className:"text-sm text-slate-500 bg-slate-50 border border-slate-200 rounded-lg p-6 text-center"},
           "📊 Este reporte (estudiantes agrupados por nivel de la Escala de Valoración) se activa cuando construyamos el módulo de Evaluaciones — ahí es donde vivirán las notas reales de cada estudiante."
         ),
