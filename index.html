@@ -644,7 +644,7 @@ const Icons = {
 // ═══════════════════════════════════════════
 // Marca de versión visible en el encabezado (junto al botón "Salir") y en la consola del
 // navegador, para verificar rápidamente si el archivo desplegado es el más reciente.
-const APP_VERSION = "2026-08-10-agregar-personal-v43";
+const APP_VERSION = "2026-08-10-docentes-por-asignatura-tarjetas-v44";
 console.log("INEDISAV Caracterización — versión cargada:", APP_VERSION);
 const ROLE_LABELS = {admin:"Admin",rector:"Rector",coordinador:"Coordinador",orientacion:"Orientación Escolar",docente:"Docente",auxiliar:"Auxiliar",estudiante:"Estudiante"};
 const ROLE_BADGE  = {admin:"bg-indigo-300 text-indigo-900",rector:"bg-purple-300 text-purple-900",coordinador:"bg-amber-300 text-amber-900",orientacion:"bg-teal-300 text-teal-900",docente:"bg-emerald-300 text-emerald-900",auxiliar:"bg-sky-300 text-sky-900",estudiante:"bg-rose-200 text-rose-900"};
@@ -2693,13 +2693,16 @@ function DocentesPorAsignaturaSeccion(){
   const [asigGrado,setAsigGrado]=useState([]);
   const [asignaturas,setAsignaturas]=useState([]);
   const [areas,setAreas]=useState([]);
-  const [busqueda,setBusqueda]=useState("");
+  const [filtroNivel,setFiltroNivel]=useState("");
+  const [filtroDocente,setFiltroDocente]=useState("");
+  const [filtroAno,setFiltroAno]=useState("");
   useEffect(()=>{ const unsub=usersStorage.subscribe(list=>setDocentes(list.filter(u=>u.role==="docente")),()=>{}); return ()=>unsub(); },[]);
   useEffect(()=>{ const unsub=asignaturasGradoStorage.subscribe(setAsigGrado,()=>{}); return ()=>unsub(); },[]);
   useEffect(()=>{ const unsub=asignaturasStorage.subscribe(setAsignaturas,()=>{}); return ()=>unsub(); },[]);
   useEffect(()=>{ const unsub=areasStorage.subscribe(setAreas,()=>{}); return ()=>unsub(); },[]);
   const etiquetaGrado=g=>(GRADO_OPTS.find(x=>x.value===g)?.label?.split(" - ")[1]||g);
 
+  // Aplana la carga académica de todos los docentes en filas: área, asignatura, grado, grupo, docente, I.H., año
   const filas=[];
   docentes.forEach(u=>{
     (u.cargaAcademica||[]).forEach(clave=>{
@@ -2709,15 +2712,31 @@ function DocentesPorAsignaturaSeccion(){
       filas.push({
         area:areas.find(ar=>ar._id===asig?.areaId)?.nombre||"",
         asignatura:asig?.nombre||"(eliminada)",
+        grado, grupo,
         curso:etiquetaGrado(grado)+(grupo?" "+grupo:""),
         docente:u.nombre,
-        ih:ag?.intensidadHoraria||""
+        ih:ag?.intensidadHoraria||"",
+        anio:ag?.anio||""
       });
     });
   });
-  const q=busqueda.trim().toLowerCase();
-  const filtradas=q?filas.filter(f=>Object.values(f).some(v=>String(v).toLowerCase().includes(q))):filas;
-  filtradas.sort((a,b)=>a.curso.localeCompare(b.curso)||a.area.localeCompare(b.area));
+
+  const aniosDisponibles=[...new Set(filas.map(f=>f.anio).filter(Boolean))].sort().reverse();
+  const nivelesDisponibles=[...new Set(filas.map(f=>nivelEducativo(f.grado)))];
+  const docentesDisponibles=[...new Set(filas.map(f=>f.docente))].sort();
+
+  const filtradas=filas.filter(f=>
+    (!filtroNivel||nivelEducativo(f.grado)===filtroNivel)
+    && (!filtroDocente||f.docente===filtroDocente)
+    && (!filtroAno||f.anio===filtroAno)
+  ).sort((a,b)=>a.curso.localeCompare(b.curso)||a.area.localeCompare(b.area));
+
+  // Agrupa por curso (grado+grupo) para las tarjetas, como en SIAN
+  const porCurso=new Map();
+  filtradas.forEach(f=>{
+    if(!porCurso.has(f.curso)) porCurso.set(f.curso,[]);
+    porCurso.get(f.curso).push(f);
+  });
 
   function hExportar(){
     const ws=XLSX.utils.json_to_sheet(filtradas.map(f=>({ÁREA:f.area,ASIGNATURA:f.asignatura,CURSO:f.curso,DOCENTE:f.docente,"I.H.":f.ih})));
@@ -2740,19 +2759,24 @@ ${lfHtml()}</body></html>`;
 
   return h('div',{className:"space-y-3"},
     h('div',{className:"flex flex-wrap gap-2"},
-      h('input',{placeholder:"🔎 Buscar...",value:busqueda,onChange:e=>setBusqueda(e.target.value),className:"border border-slate-200 rounded-lg px-3 py-2 text-sm min-w-[160px]"}),
+      aniosDisponibles.length>1&&h('select',{value:filtroAno,onChange:e=>setFiltroAno(e.target.value),className:"border border-slate-200 rounded-lg px-3 py-2 text-sm"},h('option',{value:""},"Todos los años"),aniosDisponibles.map(a=>h('option',{key:a,value:a},a))),
+      h('select',{value:filtroNivel,onChange:e=>setFiltroNivel(e.target.value),className:"border border-slate-200 rounded-lg px-3 py-2 text-sm"},h('option',{value:""},"Todos los niveles"),nivelesDisponibles.map(n=>h('option',{key:n,value:n},n))),
+      h('select',{value:filtroDocente,onChange:e=>setFiltroDocente(e.target.value),className:"border border-slate-200 rounded-lg px-3 py-2 text-sm"},h('option',{value:""},"Todos los docentes"),docentesDisponibles.map(d=>h('option',{key:d,value:d},d))),
       h('button',{onClick:hExportar,className:"px-3 py-1.5 border border-indigo-200 text-indigo-700 rounded-lg text-xs font-medium hover:bg-indigo-50"},"⬇️ Exportar Excel"),
       h('button',{onClick:hImprimir,className:"px-3 py-1.5 border border-slate-200 text-slate-700 rounded-lg text-xs font-medium hover:bg-slate-50"},"🖨️ Imprimir"),
       h('span',{className:"text-xs text-slate-400 self-center"},`${filtradas.length} registro(s)`)
     ),
     !filtradas.length?h('p',{className:"text-sm text-slate-400 text-center py-6"},"Todavía no hay carga académica asignada (ve a la pestaña Carga Académica)."):
-    h('div',{className:"border border-slate-200 rounded-lg overflow-auto max-h-[55vh]"},
-      h('table',{className:"w-full text-sm"},
-        h('thead',{className:"bg-slate-50 text-slate-500 text-xs uppercase sticky top-0"},h('tr',null,h('th',{className:"text-left px-3 py-2"},"Área"),h('th',{className:"text-left px-3 py-2"},"Asignatura"),h('th',{className:"text-left px-3 py-2"},"Curso"),h('th',{className:"text-left px-3 py-2"},"Docente"),h('th',{className:"text-left px-3 py-2"},"I.H."))),
-        h('tbody',null,filtradas.map((f,i)=>h('tr',{key:i,className:"border-t border-slate-100"},
-          h('td',{className:"px-3 py-2"},f.area), h('td',{className:"px-3 py-2"},f.asignatura), h('td',{className:"px-3 py-2"},f.curso), h('td',{className:"px-3 py-2"},f.docente), h('td',{className:"px-3 py-2"},f.ih)
-        )))
-      )
+    h('div',{className:"grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3 max-h-[60vh] overflow-y-auto pr-1"},
+      [...porCurso.entries()].map(([curso,items])=>h('div',{key:curso,className:"border border-slate-200 rounded-xl bg-slate-50 p-3"},
+        h('p',{className:"text-sm font-semibold text-slate-800 mb-2 pb-1 border-b border-slate-200"},curso),
+        h('div',{className:"space-y-2"},
+          items.map((f,i)=>h('div',{key:i,className:"bg-white rounded-lg px-2.5 py-1.5 border border-slate-100"},
+            h('p',{className:"text-xs font-medium text-slate-700"},f.asignatura," 🔒"),
+            h('p',{className:"text-[11px] text-slate-500"},f.docente)
+          ))
+        )
+      ))
     )
   );
 }
