@@ -430,6 +430,7 @@ const CONVIVENCIA_COLLECTION='inedisav_criterios_convivencia';
 const PROPOSITOS_COLLECTION='inedisav_propositos';
 const INDICADORES_COLLECTION='inedisav_indicadores';
 const BANCO_JUICIOS_COLLECTION='inedisav_banco_juicios';
+const PROCESOS_ESCALA_COLLECTION='inedisav_procesos_escala';
 const periodosStorage=makeCrudStorage(PERIODOS_COLLECTION);
 const areasStorage=makeCrudStorage(AREAS_COLLECTION);
 const asignaturasStorage=makeCrudStorage(ASIGNATURAS_COLLECTION);
@@ -440,6 +441,7 @@ const convivenciaStorage=makeCrudStorage(CONVIVENCIA_COLLECTION);
 const propositosStorage=makeCrudStorage(PROPOSITOS_COLLECTION);
 const indicadoresStorage=makeCrudStorage(INDICADORES_COLLECTION);
 const bancoJuiciosStorage=makeCrudStorage(BANCO_JUICIOS_COLLECTION);
+const procesosEscalaStorage=makeCrudStorage(PROCESOS_ESCALA_COLLECTION);
 
 // ═══════════════════════════════════════════
 // AUDITORÍA (registro de acciones importantes)
@@ -644,7 +646,7 @@ const Icons = {
 // ═══════════════════════════════════════════
 // Marca de versión visible en el encabezado (junto al botón "Salir") y en la consola del
 // navegador, para verificar rápidamente si el archivo desplegado es el más reciente.
-const APP_VERSION = "2026-08-10-banco-juicios-sian-v45";
+const APP_VERSION = "2026-08-10-procesos-escala-v46";
 console.log("INEDISAV Caracterización — versión cargada:", APP_VERSION);
 const ROLE_LABELS = {admin:"Admin",rector:"Rector",coordinador:"Coordinador",orientacion:"Orientación Escolar",docente:"Docente",auxiliar:"Auxiliar",estudiante:"Estudiante"};
 const ROLE_BADGE  = {admin:"bg-indigo-300 text-indigo-900",rector:"bg-purple-300 text-purple-900",coordinador:"bg-amber-300 text-amber-900",orientacion:"bg-teal-300 text-teal-900",docente:"bg-emerald-300 text-emerald-900",auxiliar:"bg-sky-300 text-sky-900",estudiante:"bg-rose-200 text-rose-900"};
@@ -2943,6 +2945,132 @@ ${lfHtml()}</body></html>`;
   );
 }
 
+// Pestaña "Procesos por Escala Valorativa": los componentes de evaluación (ítems que
+// deben sumar 100%) por Docente+Grado+Asignatura+Período, igual que en SIAN
+// (ej. "Proceso Integral" 100%, o dividido en "Trabajos" 30% + "Examen" 70%).
+function ProcesosEscalaSeccion(){
+  const [docentes,setDocentes]=useState([]);
+  const [asignaturas,setAsignaturas]=useState([]);
+  const [periodosDef,setPeriodosDef]=useState([]);
+  const [procesos,setProcesos]=useState([]);
+  const [loading,setLoading]=useState(true);
+  const [filtroDocente,setFiltroDocente]=useState("");
+  const [filtroGrado,setFiltroGrado]=useState("");
+  const [filtroAsignatura,setFiltroAsignatura]=useState("");
+  const [filtroPeriodo,setFiltroPeriodo]=useState("");
+  const [nuevoNombre,setNuevoNombre]=useState("");
+  const [nuevoPorcentaje,setNuevoPorcentaje]=useState("");
+  const [nuevoSubprocesos,setNuevoSubprocesos]=useState("");
+  const [editId,setEditId]=useState(null);
+  const [editNombre,setEditNombre]=useState("");
+  const [editPorcentaje,setEditPorcentaje]=useState("");
+  const [editSubprocesos,setEditSubprocesos]=useState("");
+  const [msg,setMsg]=useState(""); const [msgErr,setMsgErr]=useState(false);
+  const [duplicarPeriodo,setDuplicarPeriodo]=useState("");
+
+  useEffect(()=>{ const unsub=usersStorage.subscribe(list=>setDocentes(list.filter(u=>u.role==="docente")),()=>{}); return ()=>unsub(); },[]);
+  useEffect(()=>{ const unsub=asignaturasStorage.subscribe(setAsignaturas,()=>{}); return ()=>unsub(); },[]);
+  useEffect(()=>{ const unsub=periodosStorage.subscribe(setPeriodosDef,()=>{}); return ()=>unsub(); },[]);
+  useEffect(()=>{ const unsub=procesosEscalaStorage.subscribe(list=>{setProcesos(list);setLoading(false);},()=>setLoading(false)); return ()=>unsub(); },[]);
+
+  function say(t,err=false){setMsg(t);setMsgErr(err);setTimeout(()=>setMsg(""),3500);}
+  const etiquetaGrado=g=>(GRADO_OPTS.find(x=>x.value===g)?.label?.split(" - ")[1]||g);
+  const PERIODOS_FIJOS=[{value:"1",label:"Período 1"},{value:"2",label:"Período 2"},{value:"3",label:"Período 3"}];
+
+  const docenteObj=docentes.find(d=>d.uid===filtroDocente);
+  const gradosDelDocente=docenteObj?[...new Set((docenteObj.cargaAcademica||[]).map(c=>c.split("|")[0]))]:GRADO_OPTS.map(g=>g.value);
+  const asignaturasDelDocente=docenteObj
+    ?[...new Set((docenteObj.cargaAcademica||[]).filter(c=>!filtroGrado||c.startsWith(filtroGrado+"|")).map(c=>c.split("|")[2]))].map(id=>asignaturas.find(a=>a._id===id)).filter(Boolean)
+    :asignaturas;
+  const periodoInfo=periodosDef.find(p=>p.orden===filtroPeriodo||String(p.orden)===filtroPeriodo);
+
+  const resultados=procesos.filter(p=>
+    (!filtroDocente||p.docenteUid===filtroDocente)
+    &&(!filtroGrado||p.grado===filtroGrado)
+    &&(!filtroAsignatura||p.asignaturaId===filtroAsignatura)
+    &&(!filtroPeriodo||p.periodo===filtroPeriodo)
+  ).sort((a,b)=>(a.orden||0)-(b.orden||0));
+  const listoParaAgregar=filtroDocente&&filtroGrado&&filtroAsignatura&&filtroPeriodo;
+  const totalPorcentaje=resultados.reduce((s,p)=>s+(Number(p.porcentaje)||0),0);
+
+  async function agregar(){
+    if(!listoParaAgregar){ say("Selecciona Docente, Grado, Asignatura y Período arriba primero.",true); return; }
+    if(!nuevoNombre.trim()){ say("Escribe el nombre del proceso.",true); return; }
+    try{
+      await procesosEscalaStorage.saveOne({docenteUid:filtroDocente,grado:filtroGrado,asignaturaId:filtroAsignatura,periodo:filtroPeriodo,nombre:nuevoNombre.trim(),porcentaje:nuevoPorcentaje||"0",subprocesos:nuevoSubprocesos.trim(),orden:resultados.length+1});
+      setNuevoNombre(""); setNuevoPorcentaje(""); setNuevoSubprocesos(""); say("Proceso agregado.");
+    }catch(e){ console.error(e); say("No se pudo guardar: "+e.message,true); }
+  }
+  function empezarEdicion(p){ setEditId(p._id); setEditNombre(p.nombre||""); setEditPorcentaje(p.porcentaje||""); setEditSubprocesos(p.subprocesos||""); }
+  async function guardarEdicion(p){
+    try{ await procesosEscalaStorage.saveOne({...p,nombre:editNombre,porcentaje:editPorcentaje,subprocesos:editSubprocesos}); setEditId(null); say("Actualizado."); }
+    catch(e){ console.error(e); say("No se pudo guardar.",true); }
+  }
+  async function borrar(id){
+    if(!window.confirm("¿Eliminar este proceso?")) return;
+    try{ await procesosEscalaStorage.deleteOne(id); say("Eliminado."); }
+    catch(e){ console.error(e); say("No se pudo eliminar.",true); }
+  }
+  async function duplicar(){
+    if(!resultados.length){ say("No hay procesos en este filtro para duplicar.",true); return; }
+    if(!duplicarPeriodo){ say("Elige a qué período duplicar.",true); return; }
+    if(!window.confirm(`Se van a duplicar ${resultados.length} proceso(s) al Período ${duplicarPeriodo}. ¿Continuar?`)) return;
+    try{
+      for(const p of resultados) await procesosEscalaStorage.saveOne({docenteUid:p.docenteUid,grado:p.grado,asignaturaId:p.asignaturaId,periodo:duplicarPeriodo,nombre:p.nombre,porcentaje:p.porcentaje,subprocesos:p.subprocesos,orden:p.orden});
+      say(`${resultados.length} proceso(s) duplicado(s) al Período ${duplicarPeriodo}.`);
+    }catch(e){ console.error(e); say("No se pudo duplicar: "+e.message,true); }
+  }
+
+  const ic="border border-slate-200 rounded-lg px-3 py-2 text-sm";
+  return h('div',{className:"space-y-3"},
+    msg&&h('div',{className:`rounded-lg px-3 py-2 text-xs ${msgErr?"bg-rose-50 text-rose-700":"bg-emerald-50 text-emerald-700"}`},msg),
+    h('div',{className:"bg-slate-50 border border-slate-200 rounded-xl p-3"},
+      h('p',{className:"text-xs font-semibold text-slate-500 mb-2 uppercase"},"Filtros"),
+      h('div',{className:"grid grid-cols-2 md:grid-cols-4 gap-2"},
+        h('select',{value:filtroDocente,onChange:e=>{setFiltroDocente(e.target.value);setFiltroGrado("");setFiltroAsignatura("");},className:ic},h('option',{value:""},"— Docente —"),docentes.map(d=>h('option',{key:d.uid,value:d.uid},d.nombre))),
+        h('select',{value:filtroGrado,onChange:e=>{setFiltroGrado(e.target.value);setFiltroAsignatura("");},className:ic},h('option',{value:""},"— Grado —"),gradosDelDocente.map(g=>h('option',{key:g,value:g},etiquetaGrado(g)))),
+        h('select',{value:filtroAsignatura,onChange:e=>setFiltroAsignatura(e.target.value),className:ic},h('option',{value:""},"— Asignatura —"),asignaturasDelDocente.map(a=>h('option',{key:a._id,value:a._id},a.nombre))),
+        h('select',{value:filtroPeriodo,onChange:e=>setFiltroPeriodo(e.target.value),className:ic},h('option',{value:""},"— Período —"),PERIODOS_FIJOS.map(p=>h('option',{key:p.value,value:p.value},p.label)))
+      )
+    ),
+    filtroPeriodo&&periodoInfo&&(periodoInfo.fechaInicio||periodoInfo.fechaFin)&&h('div',{className:"bg-rose-50 border border-rose-200 rounded-lg px-3 py-2 text-xs text-rose-800"},
+      h('strong',null,"Fechas para ingresar procesos en este período: "),`${periodoInfo.fechaInicio||"?"} — ${periodoInfo.fechaFin||"?"}`
+    ),
+    h('div',{className:"flex flex-wrap items-center gap-2"},
+      h('select',{value:duplicarPeriodo,onChange:e=>setDuplicarPeriodo(e.target.value),className:ic},h('option',{value:""},"Duplicar a período..."),PERIODOS_FIJOS.filter(p=>p.value!==filtroPeriodo).map(p=>h('option',{key:p.value,value:p.value},p.label))),
+      h('button',{onClick:duplicar,className:"px-3 py-1.5 bg-sky-600 text-white rounded-lg text-xs font-medium hover:bg-sky-700"},"Duplicar"),
+      h('span',{className:`text-xs font-medium ml-auto ${totalPorcentaje===100?"text-emerald-600":"text-amber-600"}`},`Total: ${totalPorcentaje}% ${totalPorcentaje!==100&&resultados.length?"(debe sumar 100%)":""}`)
+    ),
+    listoParaAgregar&&h('div',{className:"flex flex-wrap gap-2 items-start bg-white border border-indigo-200 rounded-lg p-2"},
+      h('input',{placeholder:"Nombre del proceso (ej. Proceso Integral)",value:nuevoNombre,onChange:e=>setNuevoNombre(e.target.value),className:ic+" flex-1 min-w-[180px]"}),
+      h('input',{placeholder:"% ",type:"number",value:nuevoPorcentaje,onChange:e=>setNuevoPorcentaje(e.target.value),className:ic+" w-24"}),
+      h('input',{placeholder:"Subprocesos (opcional, separados por coma)",value:nuevoSubprocesos,onChange:e=>setNuevoSubprocesos(e.target.value),className:ic+" flex-1 min-w-[180px]"}),
+      h('button',{onClick:agregar,className:"px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm hover:bg-indigo-700"},"+ Agregar Proceso")
+    ),
+    !listoParaAgregar&&h('p',{className:"text-xs text-amber-600"},"Selecciona Docente, Grado, Asignatura y Período arriba para poder agregar procesos."),
+    loading?h('p',{className:"text-sm text-slate-400 text-center py-6"},"Cargando..."):
+    !resultados.length?h('p',{className:"text-sm text-slate-400 text-center py-6"},"No hay procesos configurados con este filtro todavía."):
+    h('div',{className:"border border-slate-200 rounded-lg overflow-auto max-h-[45vh]"},
+      h('table',{className:"w-full text-sm"},
+        h('thead',{className:"bg-indigo-600 text-white text-xs uppercase"},h('tr',null,h('th',{className:"text-left px-3 py-2"},"Código"),h('th',{className:"text-left px-3 py-2"},"Porcentaje"),h('th',{className:"text-left px-3 py-2"},"Nombre Proceso"),h('th',{className:"text-left px-3 py-2"},"SubProcesos"),h('th',{className:"text-left px-3 py-2"},"Acciones"))),
+        h('tbody',null,resultados.map((p,i)=>h('tr',{key:p._id,className:i%2===0?"bg-indigo-50/40":""},
+          h('td',{className:"px-3 py-2 text-slate-500"},i+1),
+          h('td',{className:"px-3 py-2"}, editId===p._id?h('input',{type:"number",value:editPorcentaje,onChange:e=>setEditPorcentaje(e.target.value),className:ic+" w-20"}):`${p.porcentaje||0}%`),
+          h('td',{className:"px-3 py-2"}, editId===p._id?h('input',{value:editNombre,onChange:e=>setEditNombre(e.target.value),className:ic}):p.nombre),
+          h('td',{className:"px-3 py-2"}, editId===p._id?h('input',{value:editSubprocesos,onChange:e=>setEditSubprocesos(e.target.value),className:ic,placeholder:"separados por coma"}):(p.subprocesos?p.subprocesos:h('span',{className:"text-rose-500"},"No hay subprocesos"))),
+          h('td',{className:"px-3 py-2"},h('div',{className:"flex gap-2"},
+            editId===p._id
+              ?h('button',{onClick:()=>guardarEdicion(p),className:"text-xs px-2 py-1 border border-emerald-200 text-emerald-700 rounded hover:bg-emerald-50"},"Guardar")
+              :h('button',{onClick:()=>empezarEdicion(p),className:"text-xs px-2 py-1 border border-slate-200 rounded hover:bg-slate-50"},"Editar"),
+            h('button',{onClick:()=>borrar(p._id),className:"text-xs px-2 py-1 border border-rose-200 text-rose-600 rounded hover:bg-rose-50"},"Eliminar")
+          ))
+        ))),
+        resultados.length>0&&h('tfoot',null,h('tr',{className:"bg-indigo-600 text-white font-semibold"},h('td',{className:"px-3 py-2",colSpan:2},"Total:"),h('td',{className:"px-3 py-2"},`${totalPorcentaje}%`),h('td',{colSpan:2})))
+      )
+    )
+  );
+}
+
 function DocentesPanel({onClose,onIrPersonal}){
   const [tab,setTab]=useState("registro");
   const [escala,setEscala]=useState([]);
@@ -2980,9 +3108,7 @@ function DocentesPanel({onClose,onIrPersonal}){
         ),
         tab==="porAsignatura"&&h(DocentesPorAsignaturaSeccion),
         tab==="bancoJuicios"&&h(BancoJuiciosSeccion),
-        tab==="procesosEscala"&&h('div',{className:"text-sm text-slate-500 bg-slate-50 border border-slate-200 rounded-lg p-6 text-center"},
-          "📊 Este reporte (estudiantes agrupados por nivel de la Escala de Valoración) se activa cuando construyamos el módulo de Evaluaciones — ahí es donde vivirán las notas reales de cada estudiante."
-        ),
+        tab==="procesosEscala"&&h(ProcesosEscalaSeccion),
         tab==="procesosDimension"&&h('div',{className:"text-sm text-slate-500 bg-slate-50 border border-slate-200 rounded-lg p-6 text-center"},
           "📊 Este reporte (resultados agrupados por Categoría de Juicio: Saber, Saber Hacer, Ser...) también se activa con el módulo de Evaluaciones."
         ),
