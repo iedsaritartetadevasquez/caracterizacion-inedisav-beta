@@ -431,6 +431,7 @@ const PROPOSITOS_COLLECTION='inedisav_propositos';
 const INDICADORES_COLLECTION='inedisav_indicadores';
 const BANCO_JUICIOS_COLLECTION='inedisav_banco_juicios';
 const PROCESOS_ESCALA_COLLECTION='inedisav_procesos_escala';
+const PROCESOS_DIMENSION_COLLECTION='inedisav_procesos_dimension';
 const periodosStorage=makeCrudStorage(PERIODOS_COLLECTION);
 const areasStorage=makeCrudStorage(AREAS_COLLECTION);
 const asignaturasStorage=makeCrudStorage(ASIGNATURAS_COLLECTION);
@@ -442,6 +443,7 @@ const propositosStorage=makeCrudStorage(PROPOSITOS_COLLECTION);
 const indicadoresStorage=makeCrudStorage(INDICADORES_COLLECTION);
 const bancoJuiciosStorage=makeCrudStorage(BANCO_JUICIOS_COLLECTION);
 const procesosEscalaStorage=makeCrudStorage(PROCESOS_ESCALA_COLLECTION);
+const procesosDimensionStorage=makeCrudStorage(PROCESOS_DIMENSION_COLLECTION);
 
 // ═══════════════════════════════════════════
 // AUDITORÍA (registro de acciones importantes)
@@ -646,7 +648,7 @@ const Icons = {
 // ═══════════════════════════════════════════
 // Marca de versión visible en el encabezado (junto al botón "Salir") y en la consola del
 // navegador, para verificar rápidamente si el archivo desplegado es el más reciente.
-const APP_VERSION = "2026-08-10-procesos-escala-v46";
+const APP_VERSION = "2026-08-10-procesos-dimension-v47";
 console.log("INEDISAV Caracterización — versión cargada:", APP_VERSION);
 const ROLE_LABELS = {admin:"Admin",rector:"Rector",coordinador:"Coordinador",orientacion:"Orientación Escolar",docente:"Docente",auxiliar:"Auxiliar",estudiante:"Estudiante"};
 const ROLE_BADGE  = {admin:"bg-indigo-300 text-indigo-900",rector:"bg-purple-300 text-purple-900",coordinador:"bg-amber-300 text-amber-900",orientacion:"bg-teal-300 text-teal-900",docente:"bg-emerald-300 text-emerald-900",auxiliar:"bg-sky-300 text-sky-900",estudiante:"bg-rose-200 text-rose-900"};
@@ -2948,7 +2950,7 @@ ${lfHtml()}</body></html>`;
 // Pestaña "Procesos por Escala Valorativa": los componentes de evaluación (ítems que
 // deben sumar 100%) por Docente+Grado+Asignatura+Período, igual que en SIAN
 // (ej. "Proceso Integral" 100%, o dividido en "Trabajos" 30% + "Examen" 70%).
-function ProcesosEscalaSeccion(){
+function ProcesosEscalaSeccion({storage,nota}){
   const [docentes,setDocentes]=useState([]);
   const [asignaturas,setAsignaturas]=useState([]);
   const [periodosDef,setPeriodosDef]=useState([]);
@@ -2971,7 +2973,7 @@ function ProcesosEscalaSeccion(){
   useEffect(()=>{ const unsub=usersStorage.subscribe(list=>setDocentes(list.filter(u=>u.role==="docente")),()=>{}); return ()=>unsub(); },[]);
   useEffect(()=>{ const unsub=asignaturasStorage.subscribe(setAsignaturas,()=>{}); return ()=>unsub(); },[]);
   useEffect(()=>{ const unsub=periodosStorage.subscribe(setPeriodosDef,()=>{}); return ()=>unsub(); },[]);
-  useEffect(()=>{ const unsub=procesosEscalaStorage.subscribe(list=>{setProcesos(list);setLoading(false);},()=>setLoading(false)); return ()=>unsub(); },[]);
+  useEffect(()=>{ const unsub=storage.subscribe(list=>{setProcesos(list);setLoading(false);},()=>setLoading(false)); return ()=>unsub(); },[storage]);
 
   function say(t,err=false){setMsg(t);setMsgErr(err);setTimeout(()=>setMsg(""),3500);}
   const etiquetaGrado=g=>(GRADO_OPTS.find(x=>x.value===g)?.label?.split(" - ")[1]||g);
@@ -2997,18 +2999,18 @@ function ProcesosEscalaSeccion(){
     if(!listoParaAgregar){ say("Selecciona Docente, Grado, Asignatura y Período arriba primero.",true); return; }
     if(!nuevoNombre.trim()){ say("Escribe el nombre del proceso.",true); return; }
     try{
-      await procesosEscalaStorage.saveOne({docenteUid:filtroDocente,grado:filtroGrado,asignaturaId:filtroAsignatura,periodo:filtroPeriodo,nombre:nuevoNombre.trim(),porcentaje:nuevoPorcentaje||"0",subprocesos:nuevoSubprocesos.trim(),orden:resultados.length+1});
+      await storage.saveOne({docenteUid:filtroDocente,grado:filtroGrado,asignaturaId:filtroAsignatura,periodo:filtroPeriodo,nombre:nuevoNombre.trim(),porcentaje:nuevoPorcentaje||"0",subprocesos:nuevoSubprocesos.trim(),orden:resultados.length+1});
       setNuevoNombre(""); setNuevoPorcentaje(""); setNuevoSubprocesos(""); say("Proceso agregado.");
     }catch(e){ console.error(e); say("No se pudo guardar: "+e.message,true); }
   }
   function empezarEdicion(p){ setEditId(p._id); setEditNombre(p.nombre||""); setEditPorcentaje(p.porcentaje||""); setEditSubprocesos(p.subprocesos||""); }
   async function guardarEdicion(p){
-    try{ await procesosEscalaStorage.saveOne({...p,nombre:editNombre,porcentaje:editPorcentaje,subprocesos:editSubprocesos}); setEditId(null); say("Actualizado."); }
+    try{ await storage.saveOne({...p,nombre:editNombre,porcentaje:editPorcentaje,subprocesos:editSubprocesos}); setEditId(null); say("Actualizado."); }
     catch(e){ console.error(e); say("No se pudo guardar.",true); }
   }
   async function borrar(id){
     if(!window.confirm("¿Eliminar este proceso?")) return;
-    try{ await procesosEscalaStorage.deleteOne(id); say("Eliminado."); }
+    try{ await storage.deleteOne(id); say("Eliminado."); }
     catch(e){ console.error(e); say("No se pudo eliminar.",true); }
   }
   async function duplicar(){
@@ -3016,7 +3018,7 @@ function ProcesosEscalaSeccion(){
     if(!duplicarPeriodo){ say("Elige a qué período duplicar.",true); return; }
     if(!window.confirm(`Se van a duplicar ${resultados.length} proceso(s) al Período ${duplicarPeriodo}. ¿Continuar?`)) return;
     try{
-      for(const p of resultados) await procesosEscalaStorage.saveOne({docenteUid:p.docenteUid,grado:p.grado,asignaturaId:p.asignaturaId,periodo:duplicarPeriodo,nombre:p.nombre,porcentaje:p.porcentaje,subprocesos:p.subprocesos,orden:p.orden});
+      for(const p of resultados) await storage.saveOne({docenteUid:p.docenteUid,grado:p.grado,asignaturaId:p.asignaturaId,periodo:duplicarPeriodo,nombre:p.nombre,porcentaje:p.porcentaje,subprocesos:p.subprocesos,orden:p.orden});
       say(`${resultados.length} proceso(s) duplicado(s) al Período ${duplicarPeriodo}.`);
     }catch(e){ console.error(e); say("No se pudo duplicar: "+e.message,true); }
   }
@@ -3035,6 +3037,13 @@ function ProcesosEscalaSeccion(){
     ),
     filtroPeriodo&&periodoInfo&&(periodoInfo.fechaInicio||periodoInfo.fechaFin)&&h('div',{className:"bg-rose-50 border border-rose-200 rounded-lg px-3 py-2 text-xs text-rose-800"},
       h('strong',null,"Fechas para ingresar procesos en este período: "),`${periodoInfo.fechaInicio||"?"} — ${periodoInfo.fechaFin||"?"}`
+    ),
+    nota&&filtroGrado&&h('div',{className:"bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 text-xs text-amber-800"},nota),
+    filtroGrado&&h('div',{className:"bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-xs text-slate-600 flex flex-wrap gap-x-6 gap-y-1"},
+      h('span',null,h('strong',null,"Nivel educativo: "),nivelEducativo(filtroGrado)),
+      h('span',null,h('strong',null,"Curso: "),etiquetaGrado(filtroGrado)),
+      filtroPeriodo&&h('span',null,h('strong',null,"Período: "),filtroPeriodo),
+      filtroAsignatura&&h('span',null,h('strong',null,"Asignatura: "),asignaturas.find(a=>a._id===filtroAsignatura)?.nombre||"")
     ),
     h('div',{className:"flex flex-wrap items-center gap-2"},
       h('select',{value:duplicarPeriodo,onChange:e=>setDuplicarPeriodo(e.target.value),className:ic},h('option',{value:""},"Duplicar a período..."),PERIODOS_FIJOS.filter(p=>p.value!==filtroPeriodo).map(p=>h('option',{key:p.value,value:p.value},p.label))),
@@ -3108,10 +3117,8 @@ function DocentesPanel({onClose,onIrPersonal}){
         ),
         tab==="porAsignatura"&&h(DocentesPorAsignaturaSeccion),
         tab==="bancoJuicios"&&h(BancoJuiciosSeccion),
-        tab==="procesosEscala"&&h(ProcesosEscalaSeccion),
-        tab==="procesosDimension"&&h('div',{className:"text-sm text-slate-500 bg-slate-50 border border-slate-200 rounded-lg p-6 text-center"},
-          "📊 Este reporte (resultados agrupados por Categoría de Juicio: Saber, Saber Hacer, Ser...) también se activa con el módulo de Evaluaciones."
-        ),
+        tab==="procesosEscala"&&h(ProcesosEscalaSeccion,{storage:procesosEscalaStorage}),
+        tab==="procesosDimension"&&h(ProcesosEscalaSeccion,{storage:procesosDimensionStorage,nota:"*Nota: Los procesos y subprocesos creados en un curso se verán reflejados en todos los grupos pertenecientes al grado. Ejemplo: si agregas un subproceso para Jardín A, podrá usarse para todos los grupos del grado Jardín."}),
         tab==="porGrupo"&&h(CargaAcademicaSeccion,{vista:"porGrupo"}),
         tab==="cargaAcademica"&&h(CargaAcademicaSeccion,{vista:"porDocente"})
       )
