@@ -648,7 +648,7 @@ const Icons = {
 // ═══════════════════════════════════════════
 // Marca de versión visible en el encabezado (junto al botón "Salir") y en la consola del
 // navegador, para verificar rápidamente si el archivo desplegado es el más reciente.
-const APP_VERSION = "2026-08-10-docente-por-grupo-reporte-v48";
+const APP_VERSION = "2026-08-10-carga-academica-reporte-v49";
 console.log("INEDISAV Caracterización — versión cargada:", APP_VERSION);
 const ROLE_LABELS = {admin:"Admin",rector:"Rector",coordinador:"Coordinador",orientacion:"Orientación Escolar",docente:"Docente",auxiliar:"Auxiliar",estudiante:"Estudiante"};
 const ROLE_BADGE  = {admin:"bg-indigo-300 text-indigo-900",rector:"bg-purple-300 text-purple-900",coordinador:"bg-amber-300 text-amber-900",orientacion:"bg-teal-300 text-teal-900",docente:"bg-emerald-300 text-emerald-900",auxiliar:"bg-sky-300 text-sky-900",estudiante:"bg-rose-200 text-rose-900"};
@@ -2562,6 +2562,7 @@ function CargaAcademicaSeccion({vista}){
   const [areas,setAreas]=useState([]);
   const [loading,setLoading]=useState(true);
   const [busqueda,setBusqueda]=useState("");
+  const [filtroDocenteReporte,setFiltroDocenteReporte]=useState("");
   const [abierto,setAbierto]=useState("");
   const [msg,setMsg]=useState(""); const [msgErr,setMsgErr]=useState(false);
 
@@ -2606,10 +2607,78 @@ function CargaAcademicaSeccion({vista}){
   const q=busqueda.trim().toLowerCase();
   const docentesFiltrados=q?docentes.filter(u=>(u.nombre||"").toLowerCase().includes(q)):docentes;
 
+  // Arma los datos de "Carga Académica" para un docente (curso, área, asignatura, %, I.H.S.)
+  function datosDeDocente(u){
+    return (u.cargaAcademica||[]).map(clave=>{
+      const [grado,grupo,asignaturaId]=clave.split("|");
+      const asig=asignaturas.find(a=>a._id===asignaturaId);
+      const ag=asigGrado.find(x=>x.grado===grado&&x.asignaturaId===asignaturaId);
+      return {
+        curso:etiquetaGrado(grado)+(grupo?" "+grupo:""),
+        area:areas.find(ar=>ar._id===asig?.areaId)?.nombre||"",
+        asignatura:asig?.nombre||"(eliminada)",
+        porcentaje:ag?.porcentaje||"",
+        ih:ag?.intensidadHoraria||""
+      };
+    });
+  }
+
+  function hImprimir(){
+    const docentesAImprimir=filtroDocenteReporte?docentes.filter(d=>d.uid===filtroDocenteReporte):docentes;
+    let cuerpo="";
+    if(filtroDocenteReporte){
+      const u=docentesAImprimir[0];
+      const filas=datosDeDocente(u);
+      cuerpo=`<h2>${u?.nombre||""}</h2>
+      <table><thead><tr><th>No.</th><th>Curso</th><th>Área</th><th>Asignatura</th><th>Porcentaje</th><th>I.H.S.</th></tr></thead>
+      <tbody>${filas.map((f,i)=>`<tr><td>${i+1}</td><td>${f.curso}</td><td class="tn">${f.area}</td><td class="tn">${f.asignatura}</td><td>${f.porcentaje}</td><td>${f.ih}</td></tr>`).join("")}</tbody></table>`;
+    } else {
+      cuerpo=docentesAImprimir.map(u=>{
+        const filas=datosDeDocente(u);
+        const totalIHS=filas.reduce((s,f)=>s+(Number(f.ih)||0),0);
+        if(!filas.length) return "";
+        return `<h2>${u.nombre} — TOTAL IHS: ${totalIHS}</h2>
+        <table><thead><tr><th>Curso</th><th>Asignatura</th><th>I.H.S.</th></tr></thead>
+        <tbody>${filas.map(f=>`<tr><td>${f.curso}</td><td class="tn">${f.asignatura}</td><td>${f.ih}</td></tr>`).join("")}</tbody></table>`;
+      }).join("");
+    }
+    const html=`<!DOCTYPE html><html lang="es"><head><meta charset="UTF-8"><title>Carga Académica</title>
+<style>*{box-sizing:border-box}body{font-family:Arial,sans-serif;margin:18px;font-size:11px}@media print{button{display:none!important}}
+h1{background:#1F4E79;color:#fff;text-align:center;padding:8px;font-size:13px;font-weight:700;margin:0}.sub{background:#BDD7EE;color:#1F4E79;text-align:center;padding:6px;font-size:11px;font-weight:700;margin-bottom:10px}
+h2{font-size:12px;color:#1F4E79;margin:16px 0 6px}
+table{width:100%;border-collapse:collapse;font-size:11px;margin-bottom:8px}th,td{border:1px solid #555;padding:5px}th{background:#1F4E79;color:#fff;text-align:left}.tn{text-align:left!important}
+h1,.sub{-webkit-print-color-adjust:exact;print-color-adjust:exact}</style></head><body>
+<button onclick="window.print()" style="margin-bottom:14px;padding:7px 18px;background:#4f46e5;color:#fff;border:none;border-radius:7px;cursor:pointer;">🖨️ Imprimir / Guardar PDF</button>
+${lhHtml()}<h1>IED SARID ARTETA DE VÁSQUEZ — "INEDISAV CONSTRUYENDO CALIDAD"</h1><div class="sub">CARGA ACADÉMICA</div>
+${cuerpo}
+${lfHtml()}</body></html>`;
+    dlHtml(html,"carga_academica.html");
+  }
+
+  function hExportar(){
+    const docentesAExportar=filtroDocenteReporte?docentes.filter(d=>d.uid===filtroDocenteReporte):docentes;
+    const rows=[];
+    docentesAExportar.forEach(u=>{
+      datosDeDocente(u).forEach(f=>rows.push({DOCENTE:u.nombre,CURSO:f.curso,ÁREA:f.area,ASIGNATURA:f.asignatura,PORCENTAJE:f.porcentaje,"I.H.S.":f.ih}));
+    });
+    if(!rows.length){ say("No hay carga académica para exportar con este filtro.",true); return; }
+    const ws=XLSX.utils.json_to_sheet(rows);
+    const wb=XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb,ws,"Carga Académica");
+    XLSX.writeFile(wb,`carga_academica_${new Date().toISOString().slice(0,10)}.xlsx`);
+  }
+
   if(vista==="porDocente"){
     return h('div',{className:"space-y-3"},
       msg&&h('div',{className:`rounded-lg px-3 py-2 text-xs ${msgErr?"bg-rose-50 text-rose-700":"bg-emerald-50 text-emerald-700"}`},msg),
-      h('input',{placeholder:"🔎 Buscar docente...",value:busqueda,onChange:e=>setBusqueda(e.target.value),className:"border border-slate-200 rounded-lg px-3 py-2 text-sm w-full max-w-xs"}),
+      h('div',{className:"bg-slate-50 border border-slate-200 rounded-xl p-3"},
+        h('p',{className:"text-xs font-semibold text-slate-500 mb-2 uppercase"},"Filtros"),
+        h('div',{className:"flex flex-wrap gap-2 items-center"},
+          h('select',{value:filtroDocenteReporte,onChange:e=>setFiltroDocenteReporte(e.target.value),className:"border border-slate-200 rounded-lg px-3 py-2 text-sm"},h('option',{value:""},"— Todos los docentes —"),docentes.map(d=>h('option',{key:d.uid,value:d.uid},d.nombre))),
+          h('button',{onClick:hImprimir,className:"px-3 py-1.5 border border-slate-200 text-slate-700 rounded-lg text-xs font-medium hover:bg-slate-50"},"🖨️ Imprimir"),
+          h('button',{onClick:hExportar,className:"px-3 py-1.5 border border-indigo-200 text-indigo-700 rounded-lg text-xs font-medium hover:bg-indigo-50"},"⬇️ Exportar")
+        )
+      ),
+      h('input',{placeholder:"🔎 Buscar docente para editar su carga...",value:busqueda,onChange:e=>setBusqueda(e.target.value),className:"border border-slate-200 rounded-lg px-3 py-2 text-sm w-full max-w-xs"}),
       loading?h('p',{className:"text-sm text-slate-400"},"Cargando..."):
       !docentesFiltrados.length?h('p',{className:"text-sm text-slate-400"},"No hay docentes que coincidan."):
       h('div',{className:"space-y-2"},
