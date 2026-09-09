@@ -648,7 +648,7 @@ const Icons = {
 // ═══════════════════════════════════════════
 // Marca de versión visible en el encabezado (junto al botón "Salir") y en la consola del
 // navegador, para verificar rápidamente si el archivo desplegado es el más reciente.
-const APP_VERSION = "2026-08-10-import-juicios-valorativos-v50";
+const APP_VERSION = "2026-08-10-carga-academica-tabla-total-v51";
 console.log("INEDISAV Caracterización — versión cargada:", APP_VERSION);
 const ROLE_LABELS = {admin:"Admin",rector:"Rector",coordinador:"Coordinador",orientacion:"Orientación Escolar",docente:"Docente",auxiliar:"Auxiliar",estudiante:"Estudiante"};
 const ROLE_BADGE  = {admin:"bg-indigo-300 text-indigo-900",rector:"bg-purple-300 text-purple-900",coordinador:"bg-amber-300 text-amber-900",orientacion:"bg-teal-300 text-teal-900",docente:"bg-emerald-300 text-emerald-900",auxiliar:"bg-sky-300 text-sky-900",estudiante:"bg-rose-200 text-rose-900"};
@@ -2629,9 +2629,11 @@ function CargaAcademicaSeccion({vista}){
     if(filtroDocenteReporte){
       const u=docentesAImprimir[0];
       const filas=datosDeDocente(u);
+      const totalIHS=filas.reduce((s,f)=>s+(Number(f.ih)||0),0);
       cuerpo=`<h2>${u?.nombre||""}</h2>
       <table><thead><tr><th>No.</th><th>Curso</th><th>Área</th><th>Asignatura</th><th>Porcentaje</th><th>I.H.S.</th></tr></thead>
-      <tbody>${filas.map((f,i)=>`<tr><td>${i+1}</td><td>${f.curso}</td><td class="tn">${f.area}</td><td class="tn">${f.asignatura}</td><td>${f.porcentaje}</td><td>${f.ih}</td></tr>`).join("")}</tbody></table>`;
+      <tbody>${filas.map((f,i)=>`<tr><td>${i+1}</td><td>${f.curso}</td><td class="tn">${f.area}</td><td class="tn">${f.asignatura}</td><td>${f.porcentaje}</td><td>${f.ih}</td></tr>`).join("")}
+      <tr style="font-weight:700;background:#eef2ff"><td colspan="5">Total:</td><td>${totalIHS}</td></tr></tbody></table>`;
     } else {
       cuerpo=docentesAImprimir.map(u=>{
         const filas=datosDeDocente(u);
@@ -2659,7 +2661,12 @@ ${lfHtml()}</body></html>`;
     const docentesAExportar=filtroDocenteReporte?docentes.filter(d=>d.uid===filtroDocenteReporte):docentes;
     const rows=[];
     docentesAExportar.forEach(u=>{
-      datosDeDocente(u).forEach(f=>rows.push({DOCENTE:u.nombre,CURSO:f.curso,ÁREA:f.area,ASIGNATURA:f.asignatura,PORCENTAJE:f.porcentaje,"I.H.S.":f.ih}));
+      const filas=datosDeDocente(u);
+      filas.forEach(f=>rows.push({DOCENTE:u.nombre,CURSO:f.curso,ÁREA:f.area,ASIGNATURA:f.asignatura,PORCENTAJE:f.porcentaje,"I.H.S.":f.ih}));
+      if(filtroDocenteReporte&&filas.length){
+        const totalIHS=filas.reduce((s,f)=>s+(Number(f.ih)||0),0);
+        rows.push({DOCENTE:"",CURSO:"",ÁREA:"",ASIGNATURA:"TOTAL:",PORCENTAJE:"","I.H.S.":totalIHS});
+      }
     });
     if(!rows.length){ say("No hay carga académica para exportar con este filtro.",true); return; }
     const ws=XLSX.utils.json_to_sheet(rows);
@@ -2678,6 +2685,27 @@ ${lfHtml()}</body></html>`;
           h('button',{onClick:hExportar,className:"px-3 py-1.5 border border-indigo-200 text-indigo-700 rounded-lg text-xs font-medium hover:bg-indigo-50"},"⬇️ Exportar")
         )
       ),
+      filtroDocenteReporte&&(()=>{
+        const filas=datosDeDocente(docentes.find(d=>d.uid===filtroDocenteReporte));
+        const totalIHS=filas.reduce((s,f)=>s+(Number(f.ih)||0),0);
+        return h('div',{className:"border border-slate-200 rounded-lg overflow-auto"},
+          h('p',{className:"text-sm font-semibold text-slate-800 px-3 pt-3"},"Asignaturas por año lectivo"),
+          !filas.length?h('p',{className:"text-sm text-slate-400 text-center py-6"},"Este docente no tiene carga académica asignada todavía."):
+          h('table',{className:"w-full text-sm mt-2"},
+            h('thead',{className:"bg-[#1F4E79] text-white text-xs"},h('tr',null,
+              h('th',{className:"text-left px-3 py-2"},"No."),h('th',{className:"text-left px-3 py-2"},"Curso"),h('th',{className:"text-left px-3 py-2"},"Área"),
+              h('th',{className:"text-left px-3 py-2"},"Asignatura"),h('th',{className:"text-left px-3 py-2"},"Porcentaje"),h('th',{className:"text-left px-3 py-2"},"I.H.S.")
+            )),
+            h('tbody',null,filas.map((f,i)=>h('tr',{key:i,className:"border-t border-slate-100"},
+              h('td',{className:"px-3 py-2 text-slate-400"},i+1), h('td',{className:"px-3 py-2"},f.curso), h('td',{className:"px-3 py-2"},f.area),
+              h('td',{className:"px-3 py-2"},f.asignatura), h('td',{className:"px-3 py-2"},f.porcentaje), h('td',{className:"px-3 py-2"},f.ih)
+            ))),
+            h('tfoot',null,h('tr',{className:"bg-indigo-50 font-semibold"},
+              h('td',{className:"px-3 py-2",colSpan:5},"Total:"), h('td',{className:"px-3 py-2"},totalIHS)
+            ))
+          )
+        );
+      })(),
       h('input',{placeholder:"🔎 Buscar docente para editar su carga...",value:busqueda,onChange:e=>setBusqueda(e.target.value),className:"border border-slate-200 rounded-lg px-3 py-2 text-sm w-full max-w-xs"}),
       loading?h('p',{className:"text-sm text-slate-400"},"Cargando..."):
       !docentesFiltrados.length?h('p',{className:"text-sm text-slate-400"},"No hay docentes que coincidan."):
