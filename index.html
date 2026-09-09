@@ -648,7 +648,7 @@ const Icons = {
 // ═══════════════════════════════════════════
 // Marca de versión visible en el encabezado (junto al botón "Salir") y en la consola del
 // navegador, para verificar rápidamente si el archivo desplegado es el más reciente.
-const APP_VERSION = "2026-08-10-carga-academica-tabla-total-v51";
+const APP_VERSION = "2026-08-10-carga-academica-sin-buscador-v52";
 console.log("INEDISAV Caracterización — versión cargada:", APP_VERSION);
 const ROLE_LABELS = {admin:"Admin",rector:"Rector",coordinador:"Coordinador",orientacion:"Orientación Escolar",docente:"Docente",auxiliar:"Auxiliar",estudiante:"Estudiante"};
 const ROLE_BADGE  = {admin:"bg-indigo-300 text-indigo-900",rector:"bg-purple-300 text-purple-900",coordinador:"bg-amber-300 text-amber-900",orientacion:"bg-teal-300 text-teal-900",docente:"bg-emerald-300 text-emerald-900",auxiliar:"bg-sky-300 text-sky-900",estudiante:"bg-rose-200 text-rose-900"};
@@ -2604,8 +2604,9 @@ function CargaAcademicaSeccion({vista}){
     catch(e){ console.error(e); say("No se pudo actualizar: "+e.message,true); }
   }
 
-  const q=busqueda.trim().toLowerCase();
-  const docentesFiltrados=q?docentes.filter(u=>(u.nombre||"").toLowerCase().includes(q)):docentes;
+  // Sin filtro, edita cualquier docente (lista completa); con un docente elegido arriba,
+  // la lista de edición se enfoca solo en ese, para no tener dos formas distintas de buscarlo.
+  const docentesFiltrados=filtroDocenteReporte?docentes.filter(u=>u.uid===filtroDocenteReporte):docentes;
 
   // Arma los datos de "Carga Académica" para un docente (curso, área, asignatura, %, I.H.S.)
   function datosDeDocente(u){
@@ -2706,7 +2707,6 @@ ${lfHtml()}</body></html>`;
           )
         );
       })(),
-      h('input',{placeholder:"🔎 Buscar docente para editar su carga...",value:busqueda,onChange:e=>setBusqueda(e.target.value),className:"border border-slate-200 rounded-lg px-3 py-2 text-sm w-full max-w-xs"}),
       loading?h('p',{className:"text-sm text-slate-400"},"Cargando..."):
       !docentesFiltrados.length?h('p',{className:"text-sm text-slate-400"},"No hay docentes que coincidan."):
       h('div',{className:"space-y-2"},
