@@ -429,6 +429,7 @@ const CATEGORIAS_JUICIO_COLLECTION='inedisav_categorias_juicio';
 const CONVIVENCIA_COLLECTION='inedisav_criterios_convivencia';
 const PROPOSITOS_COLLECTION='inedisav_propositos';
 const INDICADORES_COLLECTION='inedisav_indicadores';
+const RESULTADOS_INDICADOR_COLLECTION='inedisav_resultados_indicador';
 const BANCO_JUICIOS_COLLECTION='inedisav_banco_juicios';
 const PROCESOS_ESCALA_COLLECTION='inedisav_procesos_escala';
 const PROCESOS_DIMENSION_COLLECTION='inedisav_procesos_dimension';
@@ -441,6 +442,17 @@ const categoriasJuicioStorage=makeCrudStorage(CATEGORIAS_JUICIO_COLLECTION);
 const convivenciaStorage=makeCrudStorage(CONVIVENCIA_COLLECTION);
 const propositosStorage=makeCrudStorage(PROPOSITOS_COLLECTION);
 const indicadoresStorage=makeCrudStorage(INDICADORES_COLLECTION);
+// Resultados de cada estudiante por indicador+período. Se guarda con un ID compuesto
+// (estudianteId_indicadorId_periodo) para que grabar el mismo valor dos veces actualice
+// en vez de duplicar.
+const resultadosIndicadorStorage={
+  ...makeCrudStorage(RESULTADOS_INDICADOR_COLLECTION),
+  async marcar(estudianteId,indicadorId,propositoId,periodo,valor){
+    if(!db) return;
+    const id=`${estudianteId}_${indicadorId}_${periodo}`;
+    await db.collection(RESULTADOS_INDICADOR_COLLECTION).doc(id).set({estudianteId,indicadorId,propositoId,periodo,valor},{merge:true});
+  }
+};
 const bancoJuiciosStorage=makeCrudStorage(BANCO_JUICIOS_COLLECTION);
 const procesosEscalaStorage=makeCrudStorage(PROCESOS_ESCALA_COLLECTION);
 const procesosDimensionStorage=makeCrudStorage(PROCESOS_DIMENSION_COLLECTION);
@@ -648,7 +660,7 @@ const Icons = {
 // ═══════════════════════════════════════════
 // Marca de versión visible en el encabezado (junto al botón "Salir") y en la consola del
 // navegador, para verificar rápidamente si el archivo desplegado es el más reciente.
-const APP_VERSION = "2026-08-10-docente-asignatura-reasignar-v53";
+const APP_VERSION = "2026-08-10-evaluaciones-propositos-v54";
 console.log("INEDISAV Caracterización — versión cargada:", APP_VERSION);
 const ROLE_LABELS = {admin:"Admin",rector:"Rector",coordinador:"Coordinador",orientacion:"Orientación Escolar",docente:"Docente",auxiliar:"Auxiliar",estudiante:"Estudiante"};
 const ROLE_BADGE  = {admin:"bg-indigo-300 text-indigo-900",rector:"bg-purple-300 text-purple-900",coordinador:"bg-amber-300 text-amber-900",orientacion:"bg-teal-300 text-teal-900",docente:"bg-emerald-300 text-emerald-900",auxiliar:"bg-sky-300 text-sky-900",estudiante:"bg-rose-200 text-rose-900"};
@@ -3383,6 +3395,268 @@ function DocentePorGrupoReporte(){
   );
 }
 
+// ═══════════════════════════════════════════
+// MÓDULO EVALUACIONES: registro real de calificaciones/logros de los estudiantes.
+// Pestaña 1: Planillas de Propósitos de Preescolar (Jardín/Transición).
+// ═══════════════════════════════════════════
+function PlanillaPropositosSeccion(){
+  const [docentes,setDocentes]=useState([]);
+  const [propositos,setPropositos]=useState([]);
+  const [indicadores,setIndicadores]=useState([]);
+  const [students,setStudents]=useState([]);
+  const [resultados,setResultados]=useState([]);
+  const [loading,setLoading]=useState(true);
+  const [filtroPeriodo,setFiltroPeriodo]=useState("");
+  const [filtroDocente,setFiltroDocente]=useState("");
+  const [filtroCurso,setFiltroCurso]=useState(""); // "grado|grupo"
+  const [filtroProposito,setFiltroProposito]=useState("");
+  const [buscado,setBuscado]=useState(false);
+  const [msg,setMsg]=useState(""); const [msgErr,setMsgErr]=useState(false);
+  const PERIODOS_FIJOS=[{value:"1",label:"Período 1"},{value:"2",label:"Período 2"},{value:"3",label:"Período 3"}];
+
+  useEffect(()=>{ const unsub=usersStorage.subscribe(list=>setDocentes(list.filter(u=>u.role==="docente")),()=>{}); return ()=>unsub(); },[]);
+  useEffect(()=>{ const unsub=propositosStorage.subscribe(setPropositos,()=>{}); return ()=>unsub(); },[]);
+  useEffect(()=>{ const unsub=indicadoresStorage.subscribe(setIndicadores,()=>{}); return ()=>unsub(); },[]);
+  useEffect(()=>{ const unsub=studentsStorage.subscribe(list=>{setStudents(list);setLoading(false);},()=>setLoading(false)); return ()=>unsub(); },[]);
+  useEffect(()=>{ const unsub=resultadosIndicadorStorage.subscribe(setResultados,()=>{}); return ()=>unsub(); },[]);
+
+  function say(t,err=false){setMsg(t);setMsgErr(err);setTimeout(()=>setMsg(""),3500);}
+  const etiquetaGrado=g=>(GRADO_OPTS.find(x=>x.value===g)?.label?.split(" - ")[1]||g);
+
+  const docenteObj=docentes.find(d=>d.uid===filtroDocente);
+  // Cursos (grado+grupo) de preescolar que dicta este docente, según su carga académica
+  const cursosDelDocente=docenteObj
+    ?[...new Set((docenteObj.cargaAcademica||[]).map(c=>{const [g,gr]=c.split("|");return `${g}|${gr}`;}).filter(c=>{const g=c.split("|")[0];return nivelEducativo(g)==="Preescolar";}))]
+    :[];
+  const [gradoSel,grupoSel]=(filtroCurso||"|").split("|");
+  // Propósitos definidos para ese grado
+  const propositosDelCurso=propositos.filter(p=>p.grado===gradoSel);
+  const propositoObj=propositos.find(p=>p._id===filtroProposito);
+  const indicadoresDelProposito=indicadores.filter(i=>i.propositoId===filtroProposito).sort((a,b)=>(a.orden||0)-(b.orden||0));
+
+  const listoParaBuscar=filtroDocente&&filtroPeriodo&&filtroCurso&&filtroProposito;
+  const estudiantes=buscado&&listoParaBuscar
+    ? students.filter(s=>s.GRADO===gradoSel&&(s.GRUPO||"")===grupoSel&&s.ESTADO!=="RETIRADO")
+        .sort((a,b)=>((a.APELLIDO1||"")+(a.NOMBRE1||"")).localeCompare((b.APELLIDO1||"")+(b.NOMBRE1||"")))
+    : [];
+
+  function valorDe(estudianteId,indicadorId){
+    const r=resultados.find(r=>r.estudianteId===estudianteId&&r.indicadorId===indicadorId&&r.periodo===filtroPeriodo);
+    return r?r.valor:"";
+  }
+  async function marcar(estudianteId,indicadorId,valor){
+    const existente=resultados.find(r=>r.estudianteId===estudianteId&&r.indicadorId===indicadorId&&r.periodo===filtroPeriodo);
+    try{
+      await resultadosIndicadorStorage.saveOne({...(existente||{}),estudianteId,indicadorId,propositoId:filtroProposito,periodo:filtroPeriodo,valor:existente&&existente.valor===valor?"":valor});
+    }catch(e){ console.error(e); say("No se pudo guardar: "+e.message,true); }
+  }
+
+  function hImprimir(){
+    const filasHtml=estudiantes.map((s,i)=>{
+      const nombre=[s.NOMBRE1,s.NOMBRE2,s.APELLIDO1,s.APELLIDO2].filter(Boolean).join(" ");
+      const celdas=indicadoresDelProposito.map(ind=>{
+        const v=valorDe(s._id,ind._id);
+        return `<td>${v==="1"?"Alcanzado":v==="2"?"En Proceso":v==="3"?"Requiere Apoyo":"—"}</td>`;
+      }).join("");
+      return `<tr><td>${i+1}</td><td class="tn">${nombre}</td>${celdas}</tr>`;
+    }).join("");
+    const html=`<!DOCTYPE html><html lang="es"><head><meta charset="UTF-8"><title>Planilla de Propósitos</title>
+<style>*{box-sizing:border-box}body{font-family:Arial,sans-serif;margin:18px;font-size:10px}@media print{button{display:none!important}}
+h1{background:#1F4E79;color:#fff;text-align:center;padding:8px;font-size:13px;font-weight:700;margin:0}.sub{background:#BDD7EE;color:#1F4E79;text-align:center;padding:6px;font-size:11px;font-weight:700;margin-bottom:10px}
+table{width:100%;border-collapse:collapse;font-size:9.5px}th,td{border:1px solid #555;padding:4px}th{background:#1F4E79;color:#fff;text-align:left}.tn{text-align:left!important;min-width:160px}
+h1,.sub{-webkit-print-color-adjust:exact;print-color-adjust:exact}</style></head><body>
+<button onclick="window.print()" style="margin-bottom:14px;padding:7px 18px;background:#4f46e5;color:#fff;border:none;border-radius:7px;cursor:pointer;">🖨️ Imprimir / Guardar PDF</button>
+${lhHtml()}<h1>IED SARID ARTETA DE VÁSQUEZ — "INEDISAV CONSTRUYENDO CALIDAD"</h1>
+<div class="sub">PLANILLA DE PROPÓSITOS — ${etiquetaGrado(gradoSel)}${grupoSel?" "+grupoSel:""} — Período ${filtroPeriodo}</div>
+<p style="font-size:11px;font-weight:600;color:#1F4E79">${propositoObj?.texto||""}</p>
+<table><thead><tr><th>Nro</th><th class="tn">Estudiante</th>${indicadoresDelProposito.map(ind=>`<th>${(ind.texto||"").slice(0,40)}${ind.texto&&ind.texto.length>40?"…":""}</th>`).join("")}</tr></thead>
+<tbody>${filasHtml}</tbody></table>
+${lfHtml()}</body></html>`;
+    dlHtml(html,"planilla_propositos.html");
+  }
+
+  const ic="border border-slate-200 rounded-lg px-3 py-2 text-sm";
+  return h('div',{className:"space-y-3"},
+    msg&&h('div',{className:`rounded-lg px-3 py-2 text-xs ${msgErr?"bg-rose-50 text-rose-700":"bg-emerald-50 text-emerald-700"}`},msg),
+    h('div',{className:"bg-slate-50 border border-slate-200 rounded-xl p-3"},
+      h('p',{className:"text-xs font-semibold text-slate-500 mb-2 uppercase"},"Filtros"),
+      h('div',{className:"grid grid-cols-2 md:grid-cols-5 gap-2 items-center"},
+        h('select',{value:filtroDocente,onChange:e=>{setFiltroDocente(e.target.value);setFiltroCurso("");setFiltroProposito("");setBuscado(false);},className:ic},h('option',{value:""},"— Docente —"),docentes.map(d=>h('option',{key:d.uid,value:d.uid},d.nombre))),
+        h('select',{value:filtroCurso,onChange:e=>{setFiltroCurso(e.target.value);setFiltroProposito("");setBuscado(false);},className:ic},h('option',{value:""},"— Curso —"),cursosDelDocente.map(c=>{const [g,gr]=c.split("|");return h('option',{key:c,value:c},etiquetaGrado(g)+(gr?" - "+gr:""));})),
+        h('select',{value:filtroPeriodo,onChange:e=>{setFiltroPeriodo(e.target.value);setBuscado(false);},className:ic},h('option',{value:""},"— Período —"),PERIODOS_FIJOS.map(p=>h('option',{key:p.value,value:p.value},p.label))),
+        h('select',{value:filtroProposito,onChange:e=>{setFiltroProposito(e.target.value);setBuscado(false);},className:ic},h('option',{value:""},"— Propósito —"),propositosDelCurso.map(p=>h('option',{key:p._id,value:p._id},`${(p.texto||"").slice(0,45)}${p.texto&&p.texto.length>45?"…":""}`))),
+        h('button',{disabled:!listoParaBuscar,onClick:()=>setBuscado(true),className:"px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm hover:bg-indigo-700 disabled:opacity-50"},"Buscar")
+      )
+    ),
+    buscado&&propositoObj&&h('div',{className:"bg-indigo-50 border border-indigo-200 rounded-lg px-3 py-2"},
+      h('p',{className:"text-sm font-semibold text-indigo-800"},propositoObj.texto),
+      h('p',{className:"text-xs text-indigo-500"},`${etiquetaGrado(gradoSel)}${grupoSel?" "+grupoSel:""} : Período ${filtroPeriodo}`)
+    ),
+    buscado&&h('div',{className:"flex flex-wrap items-center gap-2"},
+      h('button',{onClick:hImprimir,className:"px-3 py-1.5 border border-slate-200 text-slate-700 rounded-lg text-xs font-medium hover:bg-slate-50"},"🖨️ Imprimir"),
+      h('span',{className:"text-xs text-slate-400"},"1 = Alcanzado · 2 = En Proceso · 3 = Requiere Apoyo (clic de nuevo para desmarcar)")
+    ),
+    !buscado?h('p',{className:"text-sm text-slate-400 text-center py-6"},"Elige Docente, Curso, Período y Propósito, y dale a Buscar."):
+    !indicadoresDelProposito.length?h('p',{className:"text-xs text-amber-600 text-center py-6"},"Este propósito todavía no tiene indicadores. Créalos en Directiva → Indicadores."):
+    !estudiantes.length?h('p',{className:"text-sm text-slate-400 text-center py-6"},"No hay estudiantes matriculados en este curso."):
+    h('div',{className:"border border-slate-200 rounded-lg overflow-auto max-h-[60vh]"},
+      h('table',{className:"w-full text-xs"},
+        h('thead',{className:"bg-[#1F4E79] text-white sticky top-0"},h('tr',null,
+          h('th',{className:"px-2 py-2 text-left"},"Nro"),h('th',{className:"px-2 py-2 text-left min-w-[160px]"},"Estudiante"),
+          indicadoresDelProposito.map(ind=>h('th',{key:ind._id,className:"px-2 py-2 text-center min-w-[110px]"},(ind.texto||"").slice(0,28)+((ind.texto||"").length>28?"…":"")))
+        )),
+        h('tbody',null,estudiantes.map((s,i)=>h('tr',{key:s._id,className:"border-t border-slate-100"},
+          h('td',{className:"px-2 py-2 text-slate-400"},i+1),
+          h('td',{className:"px-2 py-2"},[s.NOMBRE1,s.NOMBRE2,s.APELLIDO1,s.APELLIDO2].filter(Boolean).join(" ")),
+          indicadoresDelProposito.map(ind=>{
+            const v=valorDe(s._id,ind._id);
+            return h('td',{key:ind._id,className:"px-2 py-1"},
+              h('div',{className:"flex justify-center gap-1"},
+                ["1","2","3"].map(op=>h('button',{key:op,title:op==="1"?"Alcanzado":op==="2"?"En Proceso":"Requiere Apoyo",onClick:()=>marcar(s._id,ind._id,op),
+                  className:`w-6 h-6 rounded text-[10px] font-bold border ${v===op?(op==="1"?"bg-emerald-500 text-white border-emerald-500":op==="2"?"bg-amber-400 text-white border-amber-400":"bg-rose-400 text-white border-rose-400"):"bg-white text-slate-400 border-slate-200 hover:bg-slate-50"}`
+                },op))
+              )
+            );
+          })
+        )))
+      )
+    )
+  );
+}
+
+// ═══════════════════════════════════════════
+// MÓDULO EVALUACIONES
+// ═══════════════════════════════════════════
+
+// Pestaña "Planillas de Propósitos de Preescolar": marca el desempeño de cada
+// estudiante (1=Alcanzado, 2=En Proceso, 3=Requiere Apoyo) por cada Indicador
+// del Propósito seleccionado, para un docente+grado/grupo+período puntuales.
+function PlanillaPropositosSeccion(){
+  const [docentes,setDocentes]=useState([]);
+  const [propositos,setPropositos]=useState([]);
+  const [indicadores,setIndicadores]=useState([]);
+  const [students,setStudents]=useState([]);
+  const [resultados,setResultados]=useState([]);
+  const [loading,setLoading]=useState(true);
+  const [filtroDocente,setFiltroDocente]=useState("");
+  const [filtroCurso,setFiltroCurso]=useState(""); // "grado|grupo"
+  const [filtroPeriodo,setFiltroPeriodo]=useState("");
+  const [filtroProposito,setFiltroProposito]=useState("");
+  const [msg,setMsg]=useState(""); const [msgErr,setMsgErr]=useState(false);
+
+  useEffect(()=>{ const unsub=usersStorage.subscribe(list=>{setDocentes(list.filter(u=>u.role==="docente"));setLoading(false);},()=>setLoading(false)); return ()=>unsub(); },[]);
+  useEffect(()=>{ const unsub=propositosStorage.subscribe(setPropositos,()=>{}); return ()=>unsub(); },[]);
+  useEffect(()=>{ const unsub=indicadoresStorage.subscribe(setIndicadores,()=>{}); return ()=>unsub(); },[]);
+  useEffect(()=>{ const unsub=studentsStorage.subscribe(list=>setStudents(list),()=>{}); return ()=>unsub(); },[]);
+  useEffect(()=>{ const unsub=resultadosIndicadorStorage.subscribe(setResultados,()=>{}); return ()=>unsub(); },[]);
+
+  function say(t,err=false){setMsg(t);setMsgErr(err);setTimeout(()=>setMsg(""),3500);}
+  const etiquetaGrado=g=>(GRADO_OPTS.find(x=>x.value===g)?.label?.split(" - ")[1]||g);
+  const PERIODOS_FIJOS=[{value:"1",label:"Período 1"},{value:"2",label:"Período 2"},{value:"3",label:"Período 3"}];
+
+  const docenteObj=docentes.find(d=>d.uid===filtroDocente);
+  // Cursos (grado+grupo) donde ese docente tiene carga académica (typicamente preescolar)
+  const cursosDelDocente=docenteObj?[...new Set((docenteObj.cargaAcademica||[]).map(c=>{const[g,gr]=c.split("|");return `${g}|${gr}`;}))]:[];
+  const [gradoSel]=(filtroCurso||"|").split("|");
+  // Propósitos del grado seleccionado
+  const propositosDelGrado=filtroCurso?propositos.filter(p=>p.grado===gradoSel):[];
+  const propositoObj=propositos.find(p=>p._id===filtroProposito);
+  const indicadoresDelProposito=filtroProposito?indicadores.filter(i=>i.propositoId===filtroProposito).sort((a,b)=>(a.orden||0)-(b.orden||0)):[];
+
+  const [grado,grupo]=(filtroCurso||"|").split("|");
+  const listaEstudiantes=filtroCurso?students.filter(s=>s.GRADO===grado&&(s.GRUPO||"")===grupo&&s.ESTADO!=="RETIRADO")
+    .sort((a,b)=>((a.APELLIDO1||"")+(a.NOMBRE1||"")).localeCompare((b.APELLIDO1||"")+(b.NOMBRE1||""))):[];
+
+  const listo=filtroDocente&&filtroCurso&&filtroPeriodo&&filtroProposito;
+
+  function valorDe(estudianteId,indicadorId){
+    return resultados.find(r=>r.estudianteId===estudianteId&&r.indicadorId===indicadorId&&r.periodo===filtroPeriodo)?.valor||"";
+  }
+  async function marcar(estudianteId,indicadorId,valor){
+    try{ await resultadosIndicadorStorage.marcar(estudianteId,indicadorId,filtroProposito,filtroPeriodo,valor); }
+    catch(e){ console.error(e); say("No se pudo guardar: "+e.message,true); }
+  }
+
+  const ic="border border-slate-200 rounded-lg px-3 py-2 text-sm";
+  return h('div',{className:"space-y-3"},
+    msg&&h('div',{className:`rounded-lg px-3 py-2 text-xs ${msgErr?"bg-rose-50 text-rose-700":"bg-emerald-50 text-emerald-700"}`},msg),
+    h('div',{className:"bg-slate-50 border border-slate-200 rounded-xl p-3"},
+      h('p',{className:"text-xs font-semibold text-slate-500 mb-2 uppercase"},"Filtros"),
+      h('div',{className:"grid grid-cols-2 md:grid-cols-4 gap-2"},
+        h('select',{value:filtroDocente,onChange:e=>{setFiltroDocente(e.target.value);setFiltroCurso("");setFiltroProposito("");},className:ic},h('option',{value:""},"— Docente —"),docentes.map(d=>h('option',{key:d.uid,value:d.uid},d.nombre))),
+        h('select',{value:filtroCurso,onChange:e=>{setFiltroCurso(e.target.value);setFiltroProposito("");},className:ic},h('option',{value:""},"— Grado/Grupo —"),cursosDelDocente.map(c=>{const[g,gr]=c.split("|");return h('option',{key:c,value:c},etiquetaGrado(g)+(gr?" - "+gr:""));})),
+        h('select',{value:filtroPeriodo,onChange:e=>setFiltroPeriodo(e.target.value),className:ic},h('option',{value:""},"— Período —"),PERIODOS_FIJOS.map(p=>h('option',{key:p.value,value:p.value},p.label))),
+        h('select',{value:filtroProposito,onChange:e=>setFiltroProposito(e.target.value),className:ic},h('option',{value:""},"— Propósito —"),propositosDelGrado.map(p=>h('option',{key:p._id,value:p._id},(p.texto||"").slice(0,50)+((p.texto||"").length>50?"…":""))))
+      )
+    ),
+    !listo?h('p',{className:"text-sm text-slate-400 text-center py-6"},"Selecciona Docente, Grado/Grupo, Período y Propósito arriba."):
+    !indicadoresDelProposito.length?h('p',{className:"text-xs text-amber-600"},"Este propósito todavía no tiene indicadores. Créalos en Docentes → (próximamente) o pide que se agreguen en la configuración de Propósitos."):
+    !listaEstudiantes.length?h('p',{className:"text-sm text-slate-400 text-center py-6"},"Este grado/grupo no tiene estudiantes matriculados."):
+    h('div',{className:"space-y-3"},
+      h('div',{className:"bg-indigo-50 border border-indigo-200 rounded-lg px-3 py-2 text-xs text-indigo-800"},
+        h('p',{className:"font-semibold"},propositoObj?.texto),
+        h('p',null,etiquetaGrado(grado)+(grupo?" "+grupo:"")+" : Período "+filtroPeriodo)
+      ),
+      h('div',{className:"flex gap-3 text-xs items-center"},
+        h('span',{className:"font-semibold text-slate-600"},"DESEMPEÑO:"),
+        h('span',{className:"px-2 py-0.5 bg-white border border-slate-300 rounded"},"1 = Alcanzado"),
+        h('span',{className:"px-2 py-0.5 bg-white border border-slate-300 rounded"},"2 = En Proceso"),
+        h('span',{className:"px-2 py-0.5 bg-white border border-slate-300 rounded"},"3 = Requiere Apoyo")
+      ),
+      h('div',{className:"border border-slate-200 rounded-lg overflow-auto max-h-[60vh]"},
+        h('table',{className:"text-sm border-collapse"},
+          h('thead',{className:"bg-[#1F4E79] text-white text-[10px] sticky top-0"},
+            h('tr',null,
+              h('th',{className:"px-2 py-2 sticky left-0 bg-[#1F4E79]"},"Nro"),
+              h('th',{className:"px-2 py-2 text-left sticky left-8 bg-[#1F4E79] min-w-[180px]"},"Estudiante"),
+              indicadoresDelProposito.map(ind=>h('th',{key:ind._id,className:"px-2 py-1 min-w-[110px]"},(ind.texto||"").slice(0,28)+((ind.texto||"").length>28?"…":"")))
+            )
+          ),
+          h('tbody',null,listaEstudiantes.map((s,i)=>h('tr',{key:s._id,className:"border-t border-slate-100"},
+            h('td',{className:"px-2 py-1 text-slate-400 text-center sticky left-0 bg-white"},i+1),
+            h('td',{className:"px-2 py-1 sticky left-8 bg-white whitespace-nowrap"},[s.NOMBRE1,s.NOMBRE2,s.APELLIDO1,s.APELLIDO2].filter(Boolean).join(" ")),
+            indicadoresDelProposito.map(ind=>{
+              const val=valorDe(s._id,ind._id);
+              return h('td',{key:ind._id,className:"px-2 py-1"},
+                h('div',{className:"flex gap-1 justify-center"},
+                  ["1","2","3"].map(v=>h('button',{key:v,onClick:()=>marcar(s._id,ind._id,v),title:v==="1"?"Alcanzado":v==="2"?"En Proceso":"Requiere Apoyo",
+                    className:`w-6 h-6 rounded text-[10px] font-bold border ${val===v?(v==="1"?"bg-emerald-500 text-white border-emerald-500":v==="2"?"bg-amber-400 text-white border-amber-400":"bg-rose-400 text-white border-rose-400"):"bg-white text-slate-400 border-slate-300 hover:bg-slate-50"}`
+                  },v))
+                )
+              );
+            })
+          )))
+        )
+      )
+    )
+  );
+}
+
+function EvaluacionesPanel({onClose}){
+  const [tab,setTab]=useState("propositosPreescolar");
+  const TABS=[
+    {id:"propositosPreescolar",label:"Planillas de Propósitos de Preescolar"},
+    {id:"asignacionNotas",label:"Asignación de Notas"},
+    {id:"notasNuevos",label:"Agregar Notas Estudiantes Nuevos"}
+  ];
+  return h('div',{className:"fixed inset-0 bg-black/40 z-50 flex items-center justify-center px-4 py-6 overflow-y-auto"},
+    h('div',{className:"bg-white rounded-2xl shadow-xl w-full max-w-[96vw] xl:max-w-6xl p-6 my-auto max-h-[92vh] flex flex-col"},
+      h('div',{className:"flex items-center justify-between mb-4"},
+        h('h2',{className:"text-base font-semibold text-slate-800"},"📝 Evaluaciones"),
+        h('button',{onClick:onClose,className:"text-slate-400 hover:text-slate-600"},h(Icons.X))
+      ),
+      h('div',{className:"flex flex-wrap gap-1 mb-4 border-b border-slate-200 pb-2"},
+        TABS.map(t=>h('button',{key:t.id,onClick:()=>setTab(t.id),className:`px-3 py-1.5 rounded-lg text-xs font-medium ${tab===t.id?"bg-indigo-600 text-white":"text-slate-600 hover:bg-slate-50"}`},t.label))
+      ),
+      h('div',{className:"overflow-y-auto flex-1"},
+        tab==="propositosPreescolar"&&h(PlanillaPropositosSeccion),
+        tab==="asignacionNotas"&&h('div',{className:"text-sm text-slate-500 bg-slate-50 border border-slate-200 rounded-lg p-6 text-center"},"🚧 Próximamente — es la pieza más grande del sistema (planilla evaluativa + logros + observaciones + planeador). La construimos en el siguiente paso."),
+        tab==="notasNuevos"&&h('div',{className:"text-sm text-slate-500 bg-slate-50 border border-slate-200 rounded-lg p-6 text-center"},"🚧 Próximamente — depende de que 'Asignación de Notas' ya exista, para poder agregarles notas retroactivas a estudiantes nuevos.")
+      )
+    )
+  );
+}
+
 function DocentesPanel({onClose,onIrPersonal}){
   const [tab,setTab]=useState("registro");
   const [escala,setEscala]=useState([]);
@@ -3424,6 +3698,171 @@ function DocentesPanel({onClose,onIrPersonal}){
         tab==="procesosDimension"&&h(ProcesosEscalaSeccion,{storage:procesosDimensionStorage,nota:"*Nota: Los procesos y subprocesos creados en un curso se verán reflejados en todos los grupos pertenecientes al grado. Ejemplo: si agregas un subproceso para Jardín A, podrá usarse para todos los grupos del grado Jardín."}),
         tab==="porGrupo"&&h(DocentePorGrupoReporte),
         tab==="cargaAcademica"&&h(CargaAcademicaSeccion,{vista:"porDocente"})
+      )
+    )
+  );
+}
+
+// ═══════════════════════════════════════════
+// MÓDULO EVALUACIONES: 3 pestañas.
+// 1) Planillas de Propósitos de Preescolar (lista, funcional)
+// 2) Asignación de Notas (niveles distintos a preescolar) — próxima entrega
+// 3) Agregar Notas Estudiantes Nuevos — próxima entrega
+// ═══════════════════════════════════════════
+
+const DESEMPENO_PREESCOLAR=[{value:"1",label:"Alcanzado",color:"bg-emerald-500"},{value:"2",label:"En Proceso",color:"bg-amber-400"},{value:"3",label:"Requiere Apoyo",color:"bg-rose-500"}];
+
+function PlanillaPropositosSeccion(){
+  const [docentes,setDocentes]=useState([]);
+  const [propositos,setPropositos]=useState([]);
+  const [indicadores,setIndicadores]=useState([]);
+  const [grados,setGrados]=useState([]);
+  const [students,setStudents]=useState([]);
+  const [resultados,setResultados]=useState([]);
+  const [loadingRes,setLoadingRes]=useState(false);
+  const [filtroPeriodo,setFiltroPeriodo]=useState("");
+  const [filtroDocente,setFiltroDocente]=useState("");
+  const [filtroCurso,setFiltroCurso]=useState(""); // grado|grupo
+  const [filtroProposito,setFiltroProposito]=useState("");
+  const [buscado,setBuscado]=useState(false);
+  const [msg,setMsg]=useState(""); const [msgErr,setMsgErr]=useState(false);
+
+  useEffect(()=>{ const unsub=usersStorage.subscribe(list=>setDocentes(list.filter(u=>u.role==="docente")),()=>{}); return ()=>unsub(); },[]);
+  useEffect(()=>{ const unsub=propositosStorage.subscribe(setPropositos,()=>{}); return ()=>unsub(); },[]);
+  useEffect(()=>{ const unsub=indicadoresStorage.subscribe(setIndicadores,()=>{}); return ()=>unsub(); },[]);
+  useEffect(()=>{ const unsub=gradosStorage.subscribe(setGrados,()=>{}); return ()=>unsub(); },[]);
+  useEffect(()=>{ const unsub=studentsStorage.subscribe(list=>setStudents(list),()=>{}); return ()=>unsub(); },[]);
+
+  function say(t,err=false){setMsg(t);setMsgErr(err);setTimeout(()=>setMsg(""),3500);}
+  const etiquetaGrado=g=>(GRADO_OPTS.find(x=>x.value===g)?.label?.split(" - ")[1]||g);
+  const PERIODOS_FIJOS=[{value:"1",label:"Período 1"},{value:"2",label:"Período 2"},{value:"3",label:"Período 3"}];
+
+  const docenteObj=docentes.find(d=>d.uid===filtroDocente);
+  // Cursos (grado+grupo) del docente elegido, solo de niveles preescolar (esta pestaña es solo para eso)
+  const cursosDelDocente=docenteObj
+    ?[...new Set((docenteObj.cargaAcademica||[]).map(c=>c.split("|").slice(0,2).join("|")))]
+        .filter(clave=>nivelEducativo(clave.split("|")[0])==="Preescolar")
+    :[];
+  const propositosDelCurso=filtroCurso
+    ?propositos.filter(p=>p.grado===filtroCurso.split("|")[0])
+    :[];
+
+  const propositoSel=propositos.find(p=>p._id===filtroProposito);
+  const indicadoresDelProposito=indicadores.filter(i=>i.propositoId===filtroProposito).sort((a,b)=>(Number(a.orden)||0)-(Number(b.orden)||0));
+  const [gradoSel,grupoSel]=(filtroCurso||"|").split("|");
+  const tutorCurso=grados.find(g=>g.gradoBase===gradoSel&&(g.grupo||"")===grupoSel)?.tutor||"";
+  const estudiantesCurso=students.filter(s=>s.GRADO===gradoSel&&(s.GRUPO||"")===grupoSel&&s.ESTADO!=="RETIRADO")
+    .sort((a,b)=>((a.APELLIDO1||"")+(a.NOMBRE1||"")).localeCompare((b.APELLIDO1||"")+(b.NOMBRE1||"")));
+
+  async function buscar(){
+    if(!filtroDocente||!filtroCurso||!filtroProposito||!filtroPeriodo){ say("Completa Docente, Curso, Propósito y Período arriba.",true); return; }
+    setLoadingRes(true);
+    try{
+      if(db){
+        const snap=await db.collection(RESULTADOS_INDICADOR_COLLECTION)
+          .where("propositoId","==",filtroProposito).where("periodo","==",filtroPeriodo).get();
+        setResultados(snap.docs.map(d=>({_id:d.id,...d.data()})));
+      }
+      setBuscado(true);
+    }catch(e){ console.error(e); say("No se pudo cargar la planilla: "+e.message,true); }
+    setLoadingRes(false);
+  }
+
+  async function marcar(estudianteId,indicadorId,valor){
+    const existente=resultados.find(r=>r.estudianteId===estudianteId&&r.indicadorId===indicadorId);
+    const nuevoValor=existente&&existente.valor===valor?"":valor; // clic de nuevo lo des-marca
+    try{
+      const id=existente?existente._id:undefined;
+      const guardado=await resultadosIndicadorStorage.saveOne({_id:id,estudianteId,indicadorId,propositoId:filtroProposito,periodo:filtroPeriodo,valor:nuevoValor});
+      setResultados(prev=>{
+        const otros=prev.filter(r=>!(r.estudianteId===estudianteId&&r.indicadorId===indicadorId));
+        return [...otros,{_id:id||guardado,estudianteId,indicadorId,propositoId:filtroProposito,periodo:filtroPeriodo,valor:nuevoValor}];
+      });
+    }catch(e){ console.error(e); say("No se pudo guardar: "+e.message,true); }
+  }
+
+  const ic="border border-slate-200 rounded-lg px-3 py-2 text-sm";
+  return h('div',{className:"space-y-3"},
+    msg&&h('div',{className:`rounded-lg px-3 py-2 text-xs ${msgErr?"bg-rose-50 text-rose-700":"bg-emerald-50 text-emerald-700"}`},msg),
+    h('div',{className:"bg-slate-50 border border-slate-200 rounded-xl p-3"},
+      h('p',{className:"text-xs font-semibold text-slate-500 mb-2 uppercase"},"Filtros"),
+      h('div',{className:"grid grid-cols-2 md:grid-cols-5 gap-2 items-center"},
+        h('select',{value:filtroPeriodo,onChange:e=>{setFiltroPeriodo(e.target.value);setBuscado(false);},className:ic},h('option',{value:""},"— Período —"),PERIODOS_FIJOS.map(p=>h('option',{key:p.value,value:p.value},p.label))),
+        h('select',{value:filtroDocente,onChange:e=>{setFiltroDocente(e.target.value);setFiltroCurso("");setFiltroProposito("");setBuscado(false);},className:ic},h('option',{value:""},"— Docente —"),docentes.map(d=>h('option',{key:d.uid,value:d.uid},d.nombre))),
+        h('select',{value:filtroCurso,onChange:e=>{setFiltroCurso(e.target.value);setFiltroProposito("");setBuscado(false);},className:ic},h('option',{value:""},"— Curso —"),cursosDelDocente.map(c=>h('option',{key:c,value:c},etiquetaGrado(c.split("|")[0])+(c.split("|")[1]?" - "+c.split("|")[1]:"")))),
+        h('select',{value:filtroProposito,onChange:e=>{setFiltroProposito(e.target.value);setBuscado(false);},className:ic+" md:col-span-1"},h('option',{value:""},"— Propósito —"),propositosDelCurso.map(p=>h('option',{key:p._id,value:p._id},(p.texto||"").slice(0,50)))),
+        h('button',{onClick:buscar,className:"px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm hover:bg-indigo-700"},"Buscar")
+      ),
+      docenteObj&&!cursosDelDocente.length&&h('p',{className:"text-xs text-amber-600 mt-2"},"Este docente no tiene cursos de preescolar en su Carga Académica.")
+    ),
+    buscado&&propositoSel&&h('div',{className:"bg-indigo-50 border border-indigo-200 rounded-lg px-3 py-2"},
+      h('p',{className:"text-sm font-medium text-indigo-900"},propositoSel.texto),
+      h('p',{className:"text-xs text-indigo-600"},`${etiquetaGrado(gradoSel)}${grupoSel?" "+grupoSel:""} : Período ${filtroPeriodo}${tutorCurso?" · Docente: "+tutorCurso:""}`)
+    ),
+    buscado&&h('div',{className:"flex flex-wrap gap-3 text-xs items-center"},
+      h('span',{className:"font-semibold text-slate-600"},"DESEMPEÑO:"),
+      DESEMPENO_PREESCOLAR.map(d=>h('span',{key:d.value,className:"flex items-center gap-1"},h('span',{className:`inline-block w-4 h-4 rounded ${d.color}`}),`${d.value} = ${d.label}`))
+    ),
+    buscado&&(!indicadoresDelProposito.length
+      ?h('p',{className:"text-sm text-amber-600 text-center py-6"},"Este propósito todavía no tiene indicadores (ve a Docentes → ... o agrega uno en Directiva → Indicadores).")
+      :!estudiantesCurso.length
+        ?h('p',{className:"text-sm text-slate-400 text-center py-6"},"Este curso no tiene estudiantes matriculados.")
+        :h('div',{className:"border border-slate-200 rounded-lg overflow-auto max-h-[60vh]"},
+          h('table',{className:"text-sm border-collapse"},
+            h('thead',{className:"sticky top-0"},
+              h('tr',null,
+                h('th',{className:"bg-slate-100 text-slate-600 text-xs px-2 py-2 text-left sticky left-0 z-10"},"Nro"),
+                h('th',{className:"bg-slate-100 text-slate-600 text-xs px-2 py-2 text-left sticky left-8 z-10 min-w-[180px]"},"Estudiante"),
+                indicadoresDelProposito.map(ind=>h('th',{key:ind._id,className:"bg-[#1F4E79] text-white text-[10px] px-2 py-2 max-w-[140px]",title:ind.texto},(ind.texto||"").slice(0,40)+((ind.texto||"").length>40?"…":"")))
+              )
+            ),
+            h('tbody',null,estudiantesCurso.map((s,i)=>h('tr',{key:s._id,className:"border-t border-slate-100"},
+              h('td',{className:"px-2 py-1 text-slate-400 bg-white sticky left-0"},i+1),
+              h('td',{className:"px-2 py-1 bg-white sticky left-8 whitespace-nowrap"},[s.NOMBRE1,s.NOMBRE2,s.APELLIDO1,s.APELLIDO2].filter(Boolean).join(" ")),
+              indicadoresDelProposito.map(ind=>{
+                const actual=resultados.find(r=>r.estudianteId===s._id&&r.indicadorId===ind._id)?.valor||"";
+                return h('td',{key:ind._id,className:"px-2 py-1"},
+                  h('div',{className:"flex gap-1 justify-center"},
+                    DESEMPENO_PREESCOLAR.map(d=>h('button',{
+                      key:d.value,
+                      title:d.label,
+                      onClick:()=>marcar(s._id,ind._id,d.value),
+                      className:`w-5 h-5 rounded border text-[9px] font-bold ${actual===d.value?d.color+" text-white border-transparent":"bg-white border-slate-300 text-slate-400 hover:bg-slate-50"}`
+                    },d.value))
+                  )
+                );
+              })
+            )))
+          )
+        )
+    )
+  );
+}
+
+function EvaluacionesPanel({onClose}){
+  const [tab,setTab]=useState("propositosPreescolar");
+  const TABS=[
+    {id:"propositosPreescolar",label:"Planillas de Propósitos de Preescolar"},
+    {id:"asignacionNotas",label:"Asignación de Notas"},
+    {id:"notasNuevos",label:"Agregar Notas Estudiantes Nuevos"}
+  ];
+  return h('div',{className:"fixed inset-0 bg-black/40 z-50 flex items-center justify-center px-4 py-6 overflow-y-auto"},
+    h('div',{className:"bg-white rounded-2xl shadow-xl w-full max-w-[96vw] xl:max-w-6xl p-6 my-auto max-h-[92vh] flex flex-col"},
+      h('div',{className:"flex items-center justify-between mb-4"},
+        h('h2',{className:"text-base font-semibold text-slate-800"},"📝 Evaluaciones"),
+        h('button',{onClick:onClose,className:"text-slate-400 hover:text-slate-600"},h(Icons.X))
+      ),
+      h('div',{className:"flex flex-wrap gap-1 mb-4 border-b border-slate-200 pb-2"},
+        TABS.map(t=>h('button',{key:t.id,onClick:()=>setTab(t.id),className:`px-3 py-1.5 rounded-lg text-xs font-medium ${tab===t.id?"bg-indigo-600 text-white":"text-slate-600 hover:bg-slate-50"}`},t.label))
+      ),
+      h('div',{className:"overflow-y-auto flex-1"},
+        tab==="propositosPreescolar"&&h(PlanillaPropositosSeccion),
+        tab==="asignacionNotas"&&h('div',{className:"text-sm text-slate-500 bg-slate-50 border border-slate-200 rounded-lg p-6 text-center"},
+          "📚 Asignación de Notas (para los niveles distintos a preescolar) — próxima entrega. Va a usar la Escala de Valoración y los Procesos por Escala Valorativa que ya configuraste en Docentes."
+        ),
+        tab==="notasNuevos"&&h('div',{className:"text-sm text-slate-500 bg-slate-50 border border-slate-200 rounded-lg p-6 text-center"},
+          "🆕 Agregar Notas de Estudiantes Nuevos — próxima entrega."
+        )
       )
     )
   );
@@ -4214,6 +4653,7 @@ function App(){
   const [showGrados,setShowGrados]=useState(false);
   const [showDirectiva,setShowDirectiva]=useState(false);
   const [showDocentes,setShowDocentes]=useState(false);
+  const [showEvaluaciones,setShowEvaluaciones]=useState(false);
   const [showImportCarga,setShowImportCarga]=useState(false);
   const [showAuditoria,setShowAuditoria]=useState(false);
   const [showCompletitud,setShowCompletitud]=useState(false);
@@ -4569,6 +5009,7 @@ function App(){
             isAdmin&&h('button',{onClick:()=>{setShowGrados(true);setShowToolsMenu(false);},className:"w-full text-left px-4 py-2 text-sm hover:bg-slate-50 flex items-center gap-2"},"🎓 Grados y Tutores"),
             (isAdmin||role==="rector")&&h('button',{onClick:()=>{setShowDirectiva(true);setShowToolsMenu(false);},className:"w-full text-left px-4 py-2 text-sm hover:bg-slate-50 flex items-center gap-2"},"🏛️ Directiva"),
             (isAdmin||role==="rector"||role==="coordinador")&&h('button',{onClick:()=>{setShowDocentes(true);setShowToolsMenu(false);},className:"w-full text-left px-4 py-2 text-sm hover:bg-slate-50 flex items-center gap-2"},"👨‍🏫 Docentes"),
+            (isAdmin||role==="rector"||role==="coordinador"||role==="docente")&&h('button',{onClick:()=>{setShowEvaluaciones(true);setShowToolsMenu(false);},className:"w-full text-left px-4 py-2 text-sm hover:bg-slate-50 flex items-center gap-2"},"📝 Evaluaciones"),
             isAdmin&&h('button',{onClick:()=>{setShowImportCarga(true);setShowToolsMenu(false);},className:"w-full text-left px-4 py-2 text-sm hover:bg-slate-50 flex items-center gap-2"},"📥 Importar Carga Académica (SIAN)"),
             isAdmin&&h('button',{onClick:()=>{setShowAuditoria(true);setShowToolsMenu(false);},className:"w-full text-left px-4 py-2 text-sm hover:bg-slate-50 flex items-center gap-2"},"🕒 Auditoría"),
             isAdmin&&h('button',{onClick:()=>{setShowCompletitud(true);setShowToolsMenu(false);},className:"w-full text-left px-4 py-2 text-sm hover:bg-slate-50 flex items-center gap-2"},"📊 Completitud de Datos"),
@@ -4587,6 +5028,8 @@ function App(){
     showGrados&&h(GradosTutoresPanel,{onClose:()=>setShowGrados(false),usuario:session.nombre||session.email,rolActual:role}),
     showDirectiva&&h(DirectivaPanel,{onClose:()=>setShowDirectiva(false)}),
     showDocentes&&h(DocentesPanel,{onClose:()=>setShowDocentes(false),onIrPersonal:()=>{setShowDocentes(false);setShowPersonal(true);}}),
+    showEvaluaciones&&h(EvaluacionesPanel,{onClose:()=>setShowEvaluaciones(false)}),
+    showEvaluaciones&&h(EvaluacionesPanel,{onClose:()=>setShowEvaluaciones(false)}),
     showImportCarga&&h(ImportarCargaAcademicaModal,{onClose:()=>setShowImportCarga(false)}),
     showAuditoria&&h(AuditoriaPanel,{onClose:()=>setShowAuditoria(false)}),
     showCompletitud&&h(CompletitudPanel,{students,onClose:()=>setShowCompletitud(false)}),
